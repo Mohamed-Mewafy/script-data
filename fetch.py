@@ -36,9 +36,13 @@ async def extract_media_details(page, media_url):
     
     media_links = set()
     
+    # فلتر صارم يستبعد تماماً روابط الحماية المشفرة والإعلانات ولا يقبل إلا الروابط المباشرة
     def handle_request(request):
         url = request.url
-        ignored_domains = ["255md.com", "cloudflareinsights", "googlesyndication", "analytics", "facebook", "twitter", "ads", "ionicons", "googlevideo"]
+        ignored_domains = [
+            "asdplay.cam", "255md.com", "cloudflareinsights", "googlesyndication", 
+            "analytics", "facebook", "twitter", "ads", "ionicons", "googlevideo"
+        ]
         if any(domain in url for domain in ignored_domains):
             return
             
@@ -110,7 +114,7 @@ async def extract_media_details(page, media_url):
                 sources = await page.locator("video, video source, a[href*='.mp4'], iframe").all()
                 for src_el in sources:
                     src = await src_el.get_attribute("src") or await src_el.get_attribute("data-src") or await src_el.get_attribute("href")
-                    if src and not any(d in src for d in ["255md.com", "ads"]):
+                    if src and not any(d in src for d in ["asdplay.cam", "255md.com", "ads"]):
                         media_links.add(src)
             except:
                 pass
