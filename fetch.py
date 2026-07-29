@@ -18,10 +18,10 @@ def check_if_exists(cat_name, page_url):
     return False
 
 async def extract_media_details(page, media_url):
+    # تم إزالة حقل watch_url نهائياً من هنا
     data = {
         "title": "Unknown",
         "page_url": media_url,
-        "watch_url": media_url.rstrip("/") + "/watch/",
         "poster_url": "",
         "category_type": "",
         "duration": "",
@@ -36,7 +36,6 @@ async def extract_media_details(page, media_url):
     
     media_links = set()
     
-    # فلتر صارم يستبعد تماماً روابط الحماية المشفرة والإعلانات ولا يقبل إلا الروابط المباشرة
     def handle_request(request):
         url = request.url
         ignored_domains = [
@@ -63,9 +62,14 @@ async def extract_media_details(page, media_url):
             pass
 
         try:
-            poster_el = page.locator("img[class*='poster'], .poster img, .details-img img").first
-            if await poster_el.count() > 0:
-                data["poster_url"] = await poster_el.get_attribute("src") or await poster_el.get_attribute("data-src") or ""
+            og_image = page.locator("meta[property='og:image']")
+            if await og_image.count() > 0:
+                data["poster_url"] = await og_image.get_attribute("content") or ""
+            
+            if not data["poster_url"]:
+                poster_el = page.locator(".details-img img, .poster img, img[class*='poster'], .media-thumb img, .thumbnail img, .fixed-img img").first
+                if await poster_el.count() > 0:
+                    data["poster_url"] = await poster_el.get_attribute("src") or await poster_el.get_attribute("data-src") or await poster_el.get_attribute("data-lazy-src") or ""
         except:
             pass
 
@@ -94,7 +98,9 @@ async def extract_media_details(page, media_url):
         except:
             pass
 
-        await page.goto(data["watch_url"], timeout=30000)
+        # الانتقال لصفحة المشاهدة لاستخراج الرابط فقط بدون حفظ رابط الصفحة نفسها
+        watch_url = media_url.rstrip("/") + "/watch/"
+        await page.goto(watch_url, timeout=30000)
         
         try:
             await page.wait_for_selector("video, .play-btn, [class*='play'], iframe, .servers-list", timeout=7000)
@@ -122,7 +128,7 @@ async def extract_media_details(page, media_url):
         data["direct_links"] = list(media_links)
         
     except Exception as e:
-        print(f"[-] Error parsing {media_url}: {e}")
+        print(f"[-] Error parsing {media_url}: {e})")
         
     return data
 
@@ -184,7 +190,7 @@ async def main():
                         
                     await asyncio.sleep(2)
                     
-                    links = await page.locator(".GridItem a, .movies-list a, div[class*='Grid'] a, div[class*='item'] a").all()
+                    links = await page.locator("div[class*='GridItem'] a, div[class*='movies-list'] a, .PostItem a, article a").all()
                     if len(links) == 0:
                         links = await page.locator("a[href*='m.arsd.bid']").all()
 
@@ -202,12 +208,12 @@ async def main():
                         href = await item.get_attribute("href")
                         if href:
                             full_url = href if href.startswith("http") else f"https://m.arsd.bid{href}"
-                            if "/category/" in full_url or "/tag/" in full_url or "/watch" in full_url:
+                            if "/category/" in full_url or "/tag/" in full_url or "/watch" in full_url or "#" in full_url:
                                 continue
                             if full_url not in page_urls:
                                 page_urls.append(full_url)
                                 
-                    print(f"[+] Found {len(page_urls)} items on page {page_num}")
+                    print(f"[+] Found {len(page_urls)} unique items on page {page_num}")
                     
                     if len(page_urls) == 0 and page_num > 3:
                         break
