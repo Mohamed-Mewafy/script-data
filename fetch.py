@@ -4,8 +4,8 @@ from playwright.async_api import async_playwright
 from supabase import create_client, Client
 
 # بيانات الاتصال بـ Supabase
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "ضع_رابط_سوبابيز_هنا")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "ضع_مفتاح_سوبابيز_هنا")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xfblvqckjdstixqdtpdt.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def check_if_exists(cat_name, page_url):
@@ -22,7 +22,6 @@ def save_media_to_supabase(cat_name, data):
     if not data or not data.get("title") or data.get("title") == "Unknown":
         return
     try:
-        # إزالة التقييم من البيانات قبل الرفع
         payload = {
             "title": data["title"],
             "page_url": data["page_url"],
@@ -70,7 +69,6 @@ async def extract_full_media_details(page, media_url):
     
     media_links = set()
     
-    # مراقبة الشبكة لالتقاط أي روابط فيديو أو سيرفرات تشغيل
     def handle_request(request):
         url = request.url
         if any(ext in url for ext in [".mp4", ".m3u8", "downet", "video", "stream", "server"]) and "ionicons" not in url and "analytics" not in url:
@@ -79,7 +77,6 @@ async def extract_full_media_details(page, media_url):
     page.on("request", handle_request)
     
     try:
-        # 1. زيارة صفحة التفاصيل الأساسية لجلب المعلومات النصية
         await page.goto(media_url, timeout=45000)
         await asyncio.sleep(1)
         
@@ -91,9 +88,12 @@ async def extract_full_media_details(page, media_url):
             pass
 
         try:
-            poster_el = page.locator("img[class*='poster'], .poster img, .details-img img").first
+            # استخراج رابط البوستر بدقة من الصفحة
+            poster_el = page.locator(".Thumb img, .poster img, .details-img img, .single-poster img, div[class*='poster'] img, .story img, .Image img").first
             if await poster_el.count() > 0:
-                data["poster_url"] = await poster_el.get_attribute("src") or await poster_el.get_attribute("data-src") or ""
+                p_url = await poster_el.get_attribute("src") or await poster_el.get_attribute("data-src") or ""
+                if p_url:
+                    data["poster_url"] = p_url if p_url.startswith("http") else f"https://m.arsd.bid{p_url}"
         except:
             pass
 
@@ -122,7 +122,6 @@ async def extract_full_media_details(page, media_url):
         except:
             pass
 
-        # 2. الانتقال لصفحة المشاهدة واستخراج روابط السيرفرات
         await page.goto(data["watch_url"], timeout=30000)
         await asyncio.sleep(2)
         
