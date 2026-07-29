@@ -9,7 +9,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "ضع_مفتاح_سوبابيز_ه
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def check_if_exists(cat_name, page_url):
-    """التحقق مما إذا كان الرابط موجوداً مسبقاً في الجدول المناسب لعدم تكرار العمل"""
+    """التحقق مما إذا كان العمل موجوداً مسبقاً في الجدول المناسب لعدم تكرار الرفع"""
     try:
         table_name = "movies" if cat_name == "films" else ("anime_items" if cat_name == "anime" else "tv_series")
         res = supabase.table(table_name).select("id").eq("page_url", page_url).execute()
@@ -39,16 +39,19 @@ async def extract_media_details(page, media_url):
     
     media_links = set()
     
+    # فلتر دقيق للبحث عن روابط الـ MP4 والـ Streams المباشرة وروابط التشغيل
     def handle_request(request):
         url = request.url
-        if any(ext in url for ext in [".mp4", ".m3u8", "downet", "video", "stream", "server"]) and "ionicons" not in url and "analytics" not in url:
+        if any(ext in url for ext in [".mp4", ".m3u8", "ts", "video", "stream", "cdn", "googlevideo", "get-link", "file/", "asdplay"]) \
+           and not any(excl in url for excl in ["analytics", "googlesyndication", "facebook", "twitter", "ionicons", "ads"]):
             media_links.add(url)
 
     page.on("request", handle_request)
     
     try:
+        # 1. زيارة صفحة التفاصيل الأساسية
         await page.goto(media_url, timeout=45000)
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         
         try:
             title_el = await page.locator("h1").first.inner_text()
@@ -96,26 +99,27 @@ async def extract_media_details(page, media_url):
         except:
             pass
 
+        # 2. الانتقال لصفحة المشاهدة وانتظار تحميل الـ Player والـ Requests
         await page.goto(data["watch_url"], timeout=30000)
-        await asyncio.sleep(2)
+        await asyncio.sleep(4) # وقت كافٍ لجلب الـ Network Requests الخاصة بالتشغيل
         
+        # محاولة التفاعل مع أزرار التشغيل لجبار السيرفر على إرسال الروابط
         try:
-            play_selectors = ["video", ".plaasplay", "div[class*='play']", "button[class*='server']", ".servers-list li", ".watch-servers a"]
+            play_selectors = ["video", ".plaasplay", "div[class*='play']", "button[class*='server']", ".servers-list li", ".watch-servers a", ".play-btn"]
             for selector in play_selectors:
                 btn = page.locator(selector).first
                 if await btn.count() > 0:
-                    await btn.click(timeout=1500)
-                    await asyncio.sleep(1)
+                    await btn.click(timeout=2000)
+                    await asyncio.sleep(3)
         except:
             pass
             
-        await asyncio.sleep(2)
-        
+        # فحص إضافي لعناصر الـ video أو iframes في حال لم تُلقط عبر الشبكة
         if len(media_links) == 0:
             try:
-                iframes = await page.locator("iframe").all()
-                for iframe in iframes:
-                    src = await iframe.get_attribute("src")
+                sources = await page.locator("video source, iframe").all()
+                for src_el in sources:
+                    src = await src_el.get_attribute("src") or await src_el.get_attribute("data-src")
                     if src:
                         media_links.add(src)
             except:
@@ -216,7 +220,7 @@ async def main():
                         break
 
                     for index, url in enumerate(page_urls, start=1):
-                        # 1. فحص هل العمل موجود مسبقاً في سوبابيز قبل استخراج تفاصيله
+                        # 1. التحقق مسبقاً من قاعدة البيانات لتخطي الملفات الموجودة فعلياً
                         if check_if_exists(cat_name, url):
                             print(f"[⏭️ Skipped] Already exists in Supabase: {url}")
                             continue
