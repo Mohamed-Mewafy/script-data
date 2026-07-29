@@ -35,7 +35,6 @@ async def extract_media_details(page, media_url):
         "page_url": media_url,
         "watch_url": media_url.rstrip("/") + "/watch/",
         "poster_url": "",
-        "rating": "",
         "category_type": "",
         "duration": "",
         "year": "",
