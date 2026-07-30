@@ -1,54 +1,67 @@
 import asyncio
 import os
+import json
 from playwright.async_api import async_playwright
-from supabase import create_client, Client
 
-# بيانات الاتصال بـ Supabase
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xfblvqckjdstixqdtpdt.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+FILES = {
+    "films": "movies.json",
+    "tv": "tv_series.json",
+    "episodes": "episodes.json",
+    "anime": "anime_items.json"
+}
 
-def check_if_exists(cat_name, page_url):
+def load_local_data(cat_name):
+    filename = FILES.get(cat_name, "movies.json")
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_local_data(cat_name, data_list):
+    filename = FILES.get(cat_name, "movies.json")
     try:
-        table_name = "movies" if cat_name == "films" else ("anime_items" if cat_name == "anime" else "tv_series")
-        res = supabase.table(table_name).select("id").eq("page_url", page_url).execute()
-        if res.data and len(res.data) > 0:
-            return True
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data_list, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"[-] Check existence error: {e}")
+        print(f"[-] Error saving to {filename}: {e}")
+
+def check_if_exists_locally(cat_name, page_url, existing_items):
+    for item in existing_items:
+        if item.get("page_url") == page_url:
+            return True
     return False
 
-def save_media_to_supabase(cat_name, data):
+def save_media_locally(cat_name, data):
     if not data or not data.get("title") or data.get("title") == "Unknown":
         return
-    try:
-        payload = {
-            "title": data["title"],
-            "page_url": data["page_url"],
-            "watch_url": data["watch_url"],
-            "poster_url": data["poster_url"],
-            "category_type": data["category_type"],
-            "duration": data["duration"],
-            "year": data["year"],
-            "quality": data["quality"],
-            "language": data["language"],
-            "country": data["country"],
-            "add_date": data["add_date"],
-            "description": data["description"],
-            "direct_links": data["direct_links"]
-        }
+    
+    existing_items = load_local_data(cat_name)
+    
+    if any(item.get("page_url") == data["page_url"] for item in existing_items):
+        return
 
-        if cat_name == "films":
-            supabase.table("movies").upsert(payload, on_conflict="page_url").execute()
-            print(f"[☁️ Supabase - Movies] Saved: {payload['title']} (Links: {len(payload['direct_links'])})")
-        elif cat_name == "anime":
-            supabase.table("anime_items").upsert(payload, on_conflict="page_url").execute()
-            print(f"[☁️ Supabase - Anime] Saved: {payload['title']} (Links: {len(payload['direct_links'])})")
-        elif cat_name == "tv":
-            supabase.table("tv_series").upsert(payload, on_conflict="page_url").execute()
-            print(f"[☁️ Supabase - TV Series] Saved: {payload['title']} (Links: {len(payload['direct_links'])})")
-    except Exception as e:
-        print(f"[-] Supabase Error ({cat_name}): {e}")
+    payload = {
+        "title": data["title"],
+        "page_url": data["page_url"],
+        "watch_url": data["watch_url"],
+        "poster_url": data["poster_url"],
+        "category_type": data["category_type"],
+        "duration": data["duration"],
+        "year": data["year"],
+        "quality": data["quality"],
+        "language": data["language"],
+        "country": data["country"],
+        "add_date": data["add_date"],
+        "description": data["description"],
+        "direct_links": data["direct_links"]
+    }
+
+    existing_items.append(payload)
+    save_local_data(cat_name, existing_items)
+    print(f"[💾 JSON - {cat_name.upper()}] Saved: {payload['title']} (Links: {len(payload['direct_links'])})")
 
 async def extract_full_media_details(page, media_url):
     data = {
@@ -69,11 +82,13 @@ async def extract_full_media_details(page, media_url):
     
     media_links = set()
     
+    # دالة التقاط الطلبات الخاصة بالفيلم الحالي فقط
     def handle_request(request):
         url = request.url
         if any(ext in url for ext in [".mp4", ".m3u8", "downet", "video", "stream", "server"]) and "ionicons" not in url and "analytics" not in url:
             media_links.add(url)
 
+    # تفعيل المراقب للطلبات
     page.on("request", handle_request)
     
     try:
@@ -88,7 +103,6 @@ async def extract_full_media_details(page, media_url):
             pass
 
         try:
-            # استخراج رابط البوستر بدقة من الصفحة
             poster_el = page.locator(".Thumb img, .poster img, .details-img img, .single-poster img, div[class*='poster'] img, .story img, .Image img").first
             if await poster_el.count() > 0:
                 p_url = await poster_el.get_attribute("src") or await poster_el.get_attribute("data-src") or ""
@@ -122,6 +136,7 @@ async def extract_full_media_details(page, media_url):
         except:
             pass
 
+        # الانتقال لصفحة المشاهدة الخاصة بهذا الفيلم فقط
         await page.goto(data["watch_url"], timeout=30000)
         await asyncio.sleep(2)
         
@@ -151,6 +166,12 @@ async def extract_full_media_details(page, media_url):
         
     except Exception as e:
         print(f"[-] Error parsing {media_url}: {e}")
+    
+    # إزالة مراقب الطلبات لهذا الفيلم حتى لا يتداخل مع الفيلم القادم
+    try:
+        page.remove_listener("request", handle_request)
+    except:
+        pass
         
     return data
 
@@ -172,7 +193,7 @@ async def main():
         }
 
         for cat_name, cat_url in sections.items():
-            print(f"\n==================== Starting Clean Scrape: {cat_name} ====================")
+            print(f"\n==================== Starting Local JSON Scrape: {cat_name} ====================")
             page_num = 1
             consecutive_empty = 0
             
@@ -221,16 +242,23 @@ async def main():
                     if len(page_urls) == 0 and page_num > 3:
                         break
 
+                    existing_items = load_local_data(cat_name)
+
                     for index, url in enumerate(page_urls, start=1):
-                        if check_if_exists(cat_name, url):
-                            print(f"[⏭️ Skipped] Already exists in Supabase: {url}")
+                        if check_if_exists_locally(cat_name, url, existing_items):
+                            print(f"[⏭️ Skipped] Already exists in JSON: {url}")
                             continue
 
                         print(f"[*] Scraping {cat_name} [Page {page_num}] ({index}/{len(page_urls)}): {url}")
                         details = await extract_full_media_details(page, url)
                         
+                        target_cat = cat_name
+                        if cat_name == "tv" and ("/episode/" in url or "حلقة" in details.get("title", "")):
+                            target_cat = "episodes"
+
                         if details and details["title"] != "Unknown":
-                            save_media_to_supabase(cat_name, details)
+                            save_media_locally(target_cat, details)
+                            existing_items = load_local_data(target_cat)
                         else:
                             print(f"[-] Skipped saving due to missing title: {url}")
 
