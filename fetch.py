@@ -5,8 +5,8 @@ from playwright.async_api import async_playwright
 from supabase import create_client, Client
 
 # إعدادات Supabase (ضع بيانات مشروعك هنا)
-SUPABASE_URL = "YOUR_SUPABASE_URL"
-SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
+SUPABASE_URL = "https://xfblvqckjdstixqdtpdt.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 FILES = {
