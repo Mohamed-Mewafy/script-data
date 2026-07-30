@@ -3,12 +3,10 @@ import os
 from playwright.async_api import async_playwright
 from supabase import create_client, Client
 
-# إعدادات اتصال Supabase (يفضل استخدام متغيرات البيئة في GitHub Actions أماناً)
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "YOUR_SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "YOUR_SUPABASE_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# أسماء الجداول في Supabase مقابل كل تصنيف
 TABLES = {
     "films": "movies",
     "tv": "tv_series",
@@ -28,11 +26,11 @@ def check_if_exists_in_supabase(cat_name, page_url):
 
 def save_media_to_supabase(cat_name, data):
     if not data or not data.get("title") or data.get("title") == "Unknown":
+        print(f"[-] Skipped saving due to invalid title: {data.get('title')}")
         return
     
     table_name = TABLES.get(cat_name, "movies")
     
-    # التحقق المسبق لمنع التكرار
     if check_if_exists_in_supabase(cat_name, data["page_url"]):
         print(f"[⏭️ Skipped] Already exists in Supabase: {data['page_url']}")
         return
@@ -54,10 +52,10 @@ def save_media_to_supabase(cat_name, data):
     }
 
     try:
-        supabase.table(table_name).insert(payload).execute()
-        print(f"[☁️ Supabase - {table_name.upper()}] Inserted: {payload['title']} (Links: {len(payload['direct_links'])})")
+        res = supabase.table(table_name).insert(payload).execute()
+        print(f"[☁️ Supabase - {table_name.upper()}] Inserted successfully: {payload['title']} (Links: {len(payload['direct_links'])})")
     except Exception as e:
-        print(f"[-] Error inserting into Supabase ({table_name}): {e}")
+        print(f"[-] Error inserting into Supabase ({table_name}): {e} | Payload: {payload['title']}")
 
 async def extract_full_media_details(page, media_url):
     data = {
@@ -79,8 +77,9 @@ async def extract_full_media_details(page, media_url):
     media_links = set()
     
     try:
+        print(f"   [->] Loading media page: {media_url}")
         await page.goto(media_url, timeout=45000, wait_until="domcontentloaded")
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         
         try:
             title_el = await page.locator("h1").first.inner_text()
@@ -123,6 +122,7 @@ async def extract_full_media_details(page, media_url):
         except:
             pass
 
+        print(f"   [->] Loading watch page: {data['watch_url']}")
         await page.goto(data["watch_url"], timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(2)
         
@@ -147,6 +147,7 @@ async def extract_full_media_details(page, media_url):
                         media_links.add(full_link)
 
         data["direct_links"] = list(media_links)
+        print(f"   [+] Extracted title: '{data['title']}' with {len(data['direct_links'])} links.")
         
     except Exception as e:
         print(f"[-] Error parsing {media_url}: {e}")
@@ -154,6 +155,7 @@ async def extract_full_media_details(page, media_url):
     return data
 
 async def main():
+    print("[*] Launching browser...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -197,19 +199,25 @@ async def main():
                 
                 try:
                     response = await page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
-                    if response and response.status == 404:
-                        print(f"[-] Reached 404 at page {page_num}.")
-                        break
+                    if response:
+                        print(f"[*] Response status: {response.status}")
+                        if response.status == 404:
+                            print(f"[-] Reached 404 at page {page_num}.")
+                            break
                         
                     await asyncio.sleep(2)
                     
-                    links = await page.locator(".GridItem a, .movies-list a, div[class*='Grid'] a, div[class*='item'] a").all()
+                    # محاولة البحث عن الروابط بأكثر من طريقة لضمان التقاطها
+                    links = await page.locator(".GridItem a, .movies-list a, div[class*='Grid'] a, div[class*='item'] a, .PostItem a").all()
                     if len(links) == 0:
                         links = await page.locator("a[href*='m.arsd.bid']").all()
+
+                    print(f"[*] Found raw elements count: {len(links)}")
 
                     if len(links) == 0:
                         consecutive_empty += 1
                         if consecutive_empty >= 3:
+                            print("[-] Too many empty pages, breaking loop.")
                             break
                         page_num += 1
                         continue
@@ -222,7 +230,7 @@ async def main():
                         if href:
                             full_url = href if href.startswith("http") else f"https://m.arsd.bid{href}"
                             
-                            if "/category/" in full_url or "/tag/" in full_url or "/watch" in full_url:
+                            if "/category/" in full_url or "/tag/" in full_url or "/watch" in full_url or "page/" in full_url:
                                 continue
                                 
                             if cat_name == "films" and "mslsl" in full_url:
@@ -231,13 +239,12 @@ async def main():
                             page_urls.append(full_url)
                                 
                     page_urls = list(dict.fromkeys(page_urls))
-                    print(f"[+] Found {len(page_urls)} items on page {page_num}")
+                    print(f"[+] Filtered unique media URLs count: {len(page_urls)}")
                     
                     if len(page_urls) == 0 and page_num > 3:
                         break
 
                     for index, url in enumerate(page_urls, start=1):
-                        # التحقق السريع من وجوده في قاعدة البيانات قبل إهدار الوقت في سحب تفاصيله
                         target_cat = cat_name
                         if cat_name == "tv" and "/episode/" in url:
                             target_cat = "episodes"
@@ -246,7 +253,7 @@ async def main():
                             print(f"[⏭️ Skipped] Already exists in Supabase: {url}")
                             continue
 
-                        print(f"[*] Scraping {cat_name} [Page {page_num}] ({index}/{len(page_urls)}): {url}")
+                        print(f"[*] Scraping item ({index}/{len(page_urls)}): {url}")
                         details = await extract_full_media_details(page, url)
                         
                         if cat_name == "tv" and "حلقة" in details.get("title", ""):
