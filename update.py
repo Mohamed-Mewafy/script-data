@@ -248,7 +248,7 @@ def process_item(
                 supabase.table(target_table).insert(movie_payload).execute()
                 print(f"[+] تمت إضافة الفيلم: {clean_name}")
 
-        time.sleep(random.uniform(0.3, 0.6))
+       
 
     except Exception as e:
         print(f"[-] خطأ أثناء معالجة العنصر: {e}")
