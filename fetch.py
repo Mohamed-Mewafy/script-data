@@ -7,9 +7,9 @@ from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
-# --- إعدادات Supabase ---
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xfblvqckjdstixqdtpdt.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo")
+# --- إعدادات Supabase الخاصة بك ---
+SUPABASE_URL = "https://xfblvqckjdstixqdtpdt.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
@@ -79,7 +79,7 @@ def save_movie_to_supabase(data):
             "country": data["country"],
             "add_date": data["add_date"],
             "description": data["description"],
-            "direct_links": data["direct_links"]
+            "direct_links": data["direct_links"]  # تُحفظ كمصفوفة نصية صافية ['url1', 'url2']
         }
 
         supabase.table("movies").insert(payload).execute()
@@ -227,21 +227,18 @@ async def crawl_movies_section(sections_urls, max_pages_per_section: int = 1):
 
                 try:
                     await page.goto(
-                        current_page_url, timeout=60000, wait_until="networkidle"
+                        current_page_url, timeout=60000, wait_until="domcontentloaded"
                     )
-                    await page.wait_for_timeout(4000)
+                    await page.wait_for_timeout(3000)
 
-                    # استخراج روابط الأفلام بطريقة أدق (البحث داخل حاويات الأفلام في الموقع)
                     item_links = await page.evaluate(
                         """
                         () => {
-                            // البحث عن الكروت أو الروابط الخاصة بالأفلام مباشرة
                             const anchors = document.querySelectorAll('a.term-block, div.Thumb--Grid a, div.GridItem a, div.movies-oppers a, .EpisodesList a, .MovieList a, div.BlockItem a');
                             let links = [];
                             if (anchors.length > 0) {
                                 anchors.forEach(a => { if (a.href) links.push(a.href); });
                             } else {
-                                // كبديل: جمع كل روابط الـ a لو الكلاسات اختلفت
                                 document.querySelectorAll('a').forEach(a => {
                                     let href = a.href;
                                     if (href && (href.includes('/movie/') || href.includes('/watch/'))) {
@@ -272,5 +269,5 @@ if __name__ == "__main__":
     target_sections = [
         "https://mycima.gripe/movies/",
     ]
-    max_pages = 100000
+    max_pages = 10000
     asyncio.run(crawl_movies_section(target_sections, max_pages))
