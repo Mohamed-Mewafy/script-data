@@ -2,15 +2,24 @@ import asyncio
 import base64
 import os
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
 # --- إعدادات Supabase ---
-SUPABASE_URL = "https://xfblvqckjdstixqdtpdt.supabase.co"       # ضع رابط مشروع Supabase هنا
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo"   # ضع الـ Anon/Service Role Key هنا
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xfblvqckjdstixqdtpdt.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def clean_url_string(raw_link: str) -> str:
+    try:
+        parsed = urlparse(raw_link)
+        clean_path = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+        return clean_path if clean_path else raw_link
+    except:
+        return raw_link
 
 
 def decode_mycima_link(link: str) -> str:
@@ -21,10 +30,11 @@ def decode_mycima_link(link: str) -> str:
             if key in query_params:
                 encoded_val = query_params[key][0]
                 padded = encoded_val + "=" * (-len(encoded_val) % 4)
-                return base64.b64decode(padded).decode("utf-8")
+                decoded_bytes = base64.b64decode(padded).decode("utf-8")
+                return clean_url_string(decoded_bytes)
     except:
         pass
-    return link
+    return clean_url_string(link)
 
 
 def clean_title(raw_title: str) -> str:
@@ -39,7 +49,6 @@ def clean_title(raw_title: str) -> str:
 
 
 def movie_already_exists(title: str) -> bool:
-    """التحقق مما إذا كان الفيلم مسجلاً مسبقاً في جدول movies"""
     try:
         response = supabase.table("movies").select("title").eq("title", title).execute()
         return len(response.data) > 0
@@ -49,7 +58,6 @@ def movie_already_exists(title: str) -> bool:
 
 
 def save_movie_to_supabase(data):
-    """حفظ بيانات الفيلم في جدول movies بناءً على الأعمدة الظاهرة في الـ Schema"""
     if not data["title"] or "ماي سيما" in data["title"] or len(data["direct_links"]) == 0:
         return
 
@@ -71,16 +79,17 @@ def save_movie_to_supabase(data):
             "country": data["country"],
             "add_date": data["add_date"],
             "description": data["description"],
-            "direct_links": data["direct_links"]  # من نوع jsonb في قاعدة البيانات
+            "direct_links": data["direct_links"]
         }
 
-        response = supabase.table("movies").insert(payload).execute()
+        supabase.table("movies").insert(payload).execute()
         print(f"[+] تم حفظ الفيلم بنجاح في Supabase: {data['title']}")
     except Exception as e:
         print(f"[-] خطأ أثناء الحفظ في Supabase للعمل {data['title']}: {e}")
 
 
 async def scrape_single_item(page, url):
+    print(f"[*] جاري فحص الرابط التفصيلي: {url}")
     try:
         await page.goto(url, timeout=60000, wait_until="domcontentloaded")
         await page.wait_for_timeout(2000)
@@ -90,13 +99,14 @@ async def scrape_single_item(page, url):
 
         title_tag = soup.find("h1") or soup.find("title")
         raw_title = title_tag.get_text(strip=True) if title_tag else ""
+        print(f"[*] العنوان المستخرج: {raw_title}")
+        
         if not raw_title or "ماي سيما" in raw_title and len(raw_title) > 60:
             return
 
         clean_name = clean_title(raw_title)
         lower_raw = raw_title.lower()
 
-        # --- الفلترة الصارمة: استبعاد المسلسلات والحلقات تماماً ---
         if "حلقة" in lower_raw or "الحلقة" in lower_raw or "مسلسل" in lower_raw or "موسم" in lower_raw or "series" in url or "episodes" in url:
             print(f"[*] تخطي (ليس فيلماً): {clean_name}")
             return
@@ -105,8 +115,7 @@ async def scrape_single_item(page, url):
             print(f"[*] تخطي السحب لفيلم مسجل مسبقاً: {clean_name}")
             return
 
-        # --- استخراج الحقول بناءً على الأعمدة الموجودة في جدول movies ---
-        quality, country, duration, language, add_date = "", "", "", "", ""
+        quality, country, duration, language = "", "", "", ""
 
         for li in soup.find_all(['li', 'div', 'p', 'span']):
             text = li.get_text(" ", strip=True)
@@ -123,7 +132,6 @@ async def scrape_single_item(page, url):
                 parts = text.split(":")
                 if len(parts) > 1: duration = parts[1].strip()
 
-        # استخراج القصة (الوصف)
         description = ""
         desc_container = soup.find(string=lambda t: t and "قصة العرض" in t)
         if desc_container:
@@ -140,7 +148,6 @@ async def scrape_single_item(page, url):
 
         description = re.sub(r"قصة العرض", "", description).strip()
 
-        # استخراج البوستر النظيف
         poster_url = ""
         try:
             poster_url = await page.evaluate("""() => {
@@ -165,7 +172,6 @@ async def scrape_single_item(page, url):
         if year_tag:
             year = year_tag.get_text(strip=True)
 
-        # استخراج روابط السيرفرات المباشرة وتخزينها في direct_links
         server_elements = await page.locator(
             ".ServersList-ItemList li, ul.load-servers li, .WatchServersList li"
         ).all()
@@ -176,16 +182,15 @@ async def scrape_single_item(page, url):
                 data_watch = await el.get_attribute("data-watch")
                 if data_watch:
                     final_link = decode_mycima_link(data_watch)
-                    server_obj = {"server_name": "cimaspace", "server_url": final_link}
-                    if server_obj not in direct_links_extracted:
-                        direct_links_extracted.append(server_obj)
+                    if final_link and final_link not in direct_links_extracted:
+                        direct_links_extracted.append(final_link)
             except:
                 continue
 
         item_data = {
             "title": clean_name,
-            "page_url": url,
-            "watch_url": direct_links_extracted[0]["server_url"] if direct_links_extracted else "",
+            "page_url": clean_url_string(url),
+            "watch_url": direct_links_extracted[0] if direct_links_extracted else "",
             "poster_url": poster_url,
             "category_type": "أفلام",
             "duration": duration,
@@ -193,7 +198,7 @@ async def scrape_single_item(page, url):
             "quality": quality,
             "language": language,
             "country": country,
-            "add_date": add_date,
+            "add_date": "",
             "description": description,
             "direct_links": direct_links_extracted,
         }
@@ -201,7 +206,7 @@ async def scrape_single_item(page, url):
         save_movie_to_supabase(item_data)
 
     except Exception as e:
-        pass
+        print(f"[-] خطأ في scrape_single_item للرابط {url}: {e}")
 
 
 async def crawl_movies_section(sections_urls, max_pages_per_section: int = 1):
@@ -226,46 +231,46 @@ async def crawl_movies_section(sections_urls, max_pages_per_section: int = 1):
                     )
                     await page.wait_for_timeout(4000)
 
+                    # استخراج روابط الأفلام بطريقة أدق (البحث داخل حاويات الأفلام في الموقع)
                     item_links = await page.evaluate(
                         """
-                        (startUrl) => {
-                            const anchors = document.querySelectorAll('a');
+                        () => {
+                            // البحث عن الكروت أو الروابط الخاصة بالأفلام مباشرة
+                            const anchors = document.querySelectorAll('a.term-block, div.Thumb--Grid a, div.GridItem a, div.movies-oppers a, .EpisodesList a, .MovieList a, div.BlockItem a');
                             let links = [];
-                            anchors.forEach(a => {
-                                let href = a.href;
-                                if (href && href.includes('mycima.') && 
-                                    href !== startUrl &&
-                                    !href.endsWith('/movies') &&
-                                    !href.endsWith('/series') &&
-                                    !href.endsWith('/episodes') &&
-                                    !href.includes('/page/') && 
-                                    !href.includes('/category/') && 
-                                    !href.includes('/servers') &&
-                                    !href.includes('/imdb-') &&
-                                    !href.includes('/views-')) {
-                                    links.push(href);
-                                }
-                            });
+                            if (anchors.length > 0) {
+                                anchors.forEach(a => { if (a.href) links.push(a.href); });
+                            } else {
+                                // كبديل: جمع كل روابط الـ a لو الكلاسات اختلفت
+                                document.querySelectorAll('a').forEach(a => {
+                                    let href = a.href;
+                                    if (href && (href.includes('/movie/') || href.includes('/watch/'))) {
+                                        links.push(href);
+                                    }
+                                });
+                            }
                             return Array.from(new Set(links));
                         }
-                        """,
-                        section_url,
+                        """
                     )
+
+                    print(f"[*] عدد الروابط المستخرجة من الصفحة: {len(item_links)}")
 
                     for item_url in item_links:
                         await scrape_single_item(page, item_url)
                         await asyncio.sleep(0.3)
 
                 except Exception as e:
+                    print(f"[-] خطأ أثناء تصفح القسم {current_page_url}: {e}")
                     break
 
         await browser.close()
-    print("\n[+] تم الانتهاء من جمع وحفظ الأفلام في جدول movies بـ Supabase بنجاح!")
+    print("\n[+] تم الانتهاء من عملية الفحص والتنفيذ!")
 
 
 if __name__ == "__main__":
     target_sections = [
         "https://mycima.gripe/movies/",
     ]
-    max_pages = 1
+    max_pages = 100000
     asyncio.run(crawl_movies_section(target_sections, max_pages))
