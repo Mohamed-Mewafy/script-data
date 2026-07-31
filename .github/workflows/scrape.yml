@@ -1,14 +1,13 @@
 name: Run Media Scraper
 
 on:
-  workflow_dispatch: # يسمح بتشغيل السكربت يدوياً من علامة تبديل Actions في جيت هب
   schedule:
-    - cron: '*/30 * * * *' # يتم تشغيل السكربت تلقائياً كل 30 دقيقة
+    - cron: '0 */6 * * *' # تشغيل تلقائي كل 6 ساعات (مثلاً)
+  workflow_dispatch:      # لتمكين التشغيل اليدوي
 
 jobs:
   scrape-job:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,15 +17,15 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ---> أضف هذه الخطوة لتثبيت المكتبات المطلوبة <---
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright supabase beautifulsoup4
-          playwright install chromium
+          pip install requests beautifulsoup4 supabase
 
       - name: Run Scraper Script
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python update.py
+          python update.py # أو اسم ملف السكريبت لديك مثل fetch.py
