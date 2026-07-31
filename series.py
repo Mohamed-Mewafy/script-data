@@ -7,12 +7,10 @@ from bs4 import BeautifulSoup
 import requests
 from supabase import create_client, Client
 
-# --- بيانات اتصال سوبابيز ---
 SUPABASE_URL = "https://xfblvqckjdstixqdtpdt.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- مفتاح TMDB API لجلب البوسترات الأصلية والوصف والسنة ---
 TMDB_API_KEY = "cebc63c38c381423c4ba63134d073a93"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
@@ -39,7 +37,6 @@ COOKIES = {
 
 
 def safe_get(session, url, max_retries=3, timeout=30):
-    """دالة لطلب الرابط مع إعادة المحاولة تلقائياً لو حصل Timeout"""
     for attempt in range(max_retries):
         try:
             res = session.get(url, headers=HEADERS, cookies=COOKIES, timeout=timeout)
@@ -69,7 +66,6 @@ def clean_title(raw_title: str) -> str:
 
 def fetch_from_tmdb_smart(session: requests.Session, title: str, search_type: str):
     url = f"https://api.themoviedb.org/3/search/{search_type}"
-    
     queries_to_try = [title]
     words = title.split()
     if len(words) > 2:
@@ -77,11 +73,7 @@ def fetch_from_tmdb_smart(session: requests.Session, title: str, search_type: st
 
     for q in queries_to_try:
         for lang in ["ar-AR", "en-US"]:
-            params = {
-                "api_key": TMDB_API_KEY,
-                "query": q,
-                "language": lang
-            }
+            params = {"api_key": TMDB_API_KEY, "query": q, "language": lang}
             try:
                 res = session.get(url, params=params, timeout=10)
                 if res.status_code == 200:
@@ -90,7 +82,12 @@ def fetch_from_tmdb_smart(session: requests.Session, title: str, search_type: st
                         best = results[0]
                         desc = best.get("overview", "")
                         rel_date = best.get("release_date") or best.get("first_air_date", "")
-                        yr = int(rel_date.split("-")[0]) if rel_date and "-" in rel_date else None
+                        yr = None
+                        if rel_date and "-" in rel_date:
+                            try:
+                                yr = int(rel_date.split("-")[0])
+                            except:
+                                yr = None
                         
                         poster_path = best.get("poster_path")
                         poster_url = TMDB_IMAGE_BASE_URL + poster_path if poster_path else None
@@ -99,7 +96,6 @@ def fetch_from_tmdb_smart(session: requests.Session, title: str, search_type: st
                             return desc, yr, poster_url
             except Exception:
                 pass
-                
     return "", None, None
 
 
@@ -120,9 +116,7 @@ def get_all_categories(session: requests.Session) -> dict:
 
 def item_exists(table_name: str, watch_url: str) -> bool:
     try:
-        res = (
-            supabase.table(table_name).select("id").eq("watch_url", watch_url).execute()
-        )
+        res = supabase.table(table_name).select("id").eq("watch_url", watch_url).execute()
         if res.data and len(res.data) > 0:
             return True
     except Exception:
@@ -130,16 +124,13 @@ def item_exists(table_name: str, watch_url: str) -> bool:
     return False
 
 
-def process_item(
-    session: requests.Session, item_url: str, category_name: str, thumb_url: str
-):
+def process_item(session: requests.Session, item_url: str, category_name: str, thumb_url: str):
     try:
         res = safe_get(session, item_url)
         if not res or res.status_code != 200:
             return
 
         soup = BeautifulSoup(res.text, "html.parser")
-
         title_tag = soup.find("h1") or soup.find("title")
         if not title_tag:
             return
@@ -148,9 +139,7 @@ def process_item(
         if not clean_name:
             return
 
-        is_series = (
-            "مسلسل" in category_name or "أنمي" in category_name or "الحلقة" in raw_title or "الموسم" in raw_title
-        )
+        is_series = "مسلسل" in category_name or "أنمي" in category_name or "الحلقة" in raw_title or "الموسم" in raw_title
         is_anime = "أنمي" in category_name or "انمي" in category_name
 
         search_type = "tv" if is_series else "movie"
@@ -165,12 +154,13 @@ def process_item(
             if not year_match:
                 year_match = re.search(r"\b(19\d{2}|20\d{2})\b", res.text)
             if year_match:
-                year = int(year_match.group(1))
+                try:
+                    year = int(year_match.group(1))
+                except:
+                    year = None
 
         if not description:
-            desc_tag = soup.select_one(
-                ".StoryLine, .story, .entry-content, .post-story, .description"
-            )
+            desc_tag = soup.select_one(".StoryLine, .story, .entry-content, .post-story, .description")
             if desc_tag:
                 description = desc_tag.get_text(strip=True)
 
@@ -179,11 +169,7 @@ def process_item(
             src = iframe.get("src") or iframe.get("data-src")
             if src:
                 src_str = str(src)
-                if (
-                    "embed" in src_str
-                    or src_str.endswith(".html")
-                    or "cybervynx" in src_str
-                ) and "facebook" not in src_str:
+                if ("embed" in src_str or src_str.endswith(".html") or "cybervynx" in src_str) and "facebook" not in src_str:
                     if src_str not in direct_links:
                         direct_links.append(src_str)
 
@@ -196,12 +182,7 @@ def process_item(
             target_table = "anime_items" if is_anime else "tv_series"
             series_id = None
 
-            existing_series = (
-                supabase.table(target_table)
-                .select("id")
-                .eq("title", clean_name)
-                .execute()
-            )
+            existing_series = supabase.table(target_table).select("id").eq("title", clean_name).execute()
 
             if existing_series.data and len(existing_series.data) > 0:
                 first_row = existing_series.data[0]
@@ -215,9 +196,7 @@ def process_item(
                     "year": year,
                     "description": description,
                 }
-                insert_res = (
-                    supabase.table(target_table).insert(series_payload).execute()
-                )
+                insert_res = supabase.table(target_table).insert(series_payload).execute()
                 if insert_res.data and len(insert_res.data) > 0:
                     inserted_row = insert_res.data[0]
                     if isinstance(inserted_row, dict) and "id" in inserted_row:
@@ -241,7 +220,7 @@ def process_item(
                         "watch_url": primary_watch_url,
                         "season_number": season_num,
                         "episode_number": ep_num,
-                        "direct_links": direct_links,
+                        "direct_links": direct_links, تصنيفات
                     }
                     supabase.table("episodes").insert(episode_payload).execute()
                     print(f"    [->] تمت إضافة الحلقة للمسلسل {clean_name} (موسم {season_num} - حلقة {ep_num})")
@@ -261,7 +240,7 @@ def process_item(
                 supabase.table(target_table).insert(movie_payload).execute()
                 print(f"[+] تمت إضافة الفيلم: {clean_name}")
 
-        time.sleep(random.uniform(0.2, 0.4))
+        time.sleep(random.uniform(0.1, 0.2))
 
     except Exception as e:
         print(f"[-] خطأ أثناء معالجة العنصر: {e}")
@@ -272,23 +251,23 @@ def crawl_site():
     categories = get_all_categories(session)
 
     for cat_name, cat_url in categories.items():
-        # --- تخطي أقسام الأفلام والبدء مباشرة من المسلسلات والأنمي ---
         if "افلام" in cat_name or "أفلام" in cat_name:
             print(f"[*] تخطي قسم الأفلام: {cat_name}")
             continue
 
         print(f"\n==========================================")
-        print(f"[*] البدء في سحب قسم: {cat_name}")
+        print(f"[*] البدء في سحب قسم كامل من البداية: {cat_name}")
         print(f"==========================================")
 
-        page = 1
-        while True:
+        # نسحب حتى 150 صفحة أو حسب المتاح لكل قسم لضمان جلب كل الأرشيف القديم
+        for page in range(1, 150):
             target_url = f"{cat_url}page/{page}/" if page > 1 else cat_url
-            print(f"--- {cat_name} | الصفحة {page} ---")
+            print(f"--- {cat_name} | صفحة رقم {page} ---")
 
             try:
                 res = safe_get(session, target_url)
                 if not res or res.status_code != 200:
+                    print(لأن الصفحات انتهت أو حدث خطأ. الانتقال للقسم التالي)
                     break
 
                 soup = BeautifulSoup(res.text, "html.parser")
@@ -313,12 +292,12 @@ def crawl_site():
                             items_map[full_url] = img_src
 
                 if not items_map:
+                    print([*] لا توجد عناصر أخرى في هذه الصفحة.)
                     break
 
                 for link, thumb in items_map.items():
                     process_item(session, link, cat_name, thumb)
 
-                page += 1
             except Exception as e:
                 print(f"[-] خطأ في الصفحة {page}: {e}")
                 break
