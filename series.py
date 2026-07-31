@@ -220,7 +220,7 @@ def process_item(session: requests.Session, item_url: str, category_name: str, t
                         "watch_url": primary_watch_url,
                         "season_number": season_num,
                         "episode_number": ep_num,
-                        "direct_links": direct_links, تصنيفات
+                        "direct_links": direct_links,
                     }
                     supabase.table("episodes").insert(episode_payload).execute()
                     print(f"    [->] تمت إضافة الحلقة للمسلسل {clean_name} (موسم {season_num} - حلقة {ep_num})")
@@ -259,7 +259,6 @@ def crawl_site():
         print(f"[*] البدء في سحب قسم كامل من البداية: {cat_name}")
         print(f"==========================================")
 
-        # نسحب حتى 150 صفحة أو حسب المتاح لكل قسم لضمان جلب كل الأرشيف القديم
         for page in range(1, 150):
             target_url = f"{cat_url}page/{page}/" if page > 1 else cat_url
             print(f"--- {cat_name} | صفحة رقم {page} ---")
@@ -267,7 +266,7 @@ def crawl_site():
             try:
                 res = safe_get(session, target_url)
                 if not res or res.status_code != 200:
-                    print(لأن الصفحات انتهت أو حدث خطأ. الانتقال للقسم التالي)
+                    print("[*] انتهت صفحات القسم أو حدث خطأ في الاتصال.")
                     break
 
                 soup = BeautifulSoup(res.text, "html.parser")
@@ -292,7 +291,7 @@ def crawl_site():
                             items_map[full_url] = img_src
 
                 if not items_map:
-                    print([*] لا توجد عناصر أخرى في هذه الصفحة.)
+                    print("[*] لا توجد عناصر أخرى في هذه الصفحة.")
                     break
 
                 for link, thumb in items_map.items():
