@@ -1,5 +1,7 @@
 import os
 import re
+import time
+import random
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 import requests
@@ -10,11 +12,17 @@ SUPABASE_URL = "https://xfblvqckjdstixqdtpdt.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmYmx2cWNramRzdGl4cWR0cGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzMzY5NTIsImV4cCI6MjEwMDkxMjk1Mn0.TJ9Vz5FFPFNc7EbsUzF3U4TzKYgQez-SlKHnGRUmCuo"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --- مفتاح TMDB API لجلب البوسترات الأصلية والوصف والسنة ---
+TMDB_API_KEY = "cebc63c38c381423c4ba63134d073a93"
+TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
+
+BASE_URL = "https://w1.movizland.watch/"
+
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "max-age=0",
-    "Referer": "https://w1.movizland.watch/",
+    "Referer": BASE_URL,
     "Sec-Ch-UA": '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
     "Sec-Ch-UA-Mobile": "?1",
     "Sec-Ch-UA-Platform": '"Android"',
@@ -29,19 +37,54 @@ COOKIES = {
     "_ga_T32S8XQYBY": "GS2.1.s1785509756$o1$g1$t1785510278$j9$l0$h0",
 }
 
-BASE_URL = "https://w1.movizland.watch/"
-
 
 def clean_title(raw_title: str) -> str:
     title = re.sub(
-        r"مشاهدة|مسلسل|فيلم|مترجم|موفيز لاند|ماي سيما|وي سيما|mycima|wecima|\([0-9]{4}\)",
+        r"مشاهدة|مسلسل|فيلم|مترجم|مدبلج|موفيز لاند|ماي سيما|وي سيما|mycima|wecima|\([0-9]{4}\)",
         "",
         raw_title,
         flags=re.IGNORECASE,
     )
+    title = re.sub(r"الموسم\s+\d+|الحلقة\s+\d+|S\d+E\d+", "", title, flags=re.IGNORECASE)
     title = re.sub(r"[-|–—:]+", " ", title)
     title = re.sub(r"\s+", " ", title).strip()
     return re.sub(r"\s+ة$", "", title).strip()
+
+
+def fetch_from_tmdb_smart(session: requests.Session, title: str, search_type: str):
+    url = f"https://api.themoviedb.org/3/search/{search_type}"
+    
+    queries_to_try = [title]
+    words = title.split()
+    if len(words) > 2:
+        queries_to_try.append(" ".join(words[:2]))
+
+    for q in queries_to_try:
+        for lang in ["ar-AR", "en-US"]:
+            params = {
+                "api_key": TMDB_API_KEY,
+                "query": q,
+                "language": lang
+            }
+            try:
+                res = session.get(url, params=params, timeout=10)
+                if res.status_code == 200:
+                    results = res.json().get("results", [])
+                    if results:
+                        best = results[0]
+                        desc = best.get("overview", "")
+                        rel_date = best.get("release_date") or best.get("first_air_date", "")
+                        yr = int(rel_date.split("-")[0]) if rel_date and "-" in rel_date else None
+                        
+                        poster_path = best.get("poster_path")
+                        poster_url = TMDB_IMAGE_BASE_URL + poster_path if poster_path else None
+                        
+                        if desc or poster_url:
+                            return desc, yr, poster_url
+            except Exception:
+                pass
+                
+    return "", None, None
 
 
 def get_all_categories(session: requests.Session) -> dict:
@@ -89,24 +132,34 @@ def process_item(
             return
         raw_title = title_tag.get_text(strip=True)
         clean_name = clean_title(raw_title)
+        if not clean_name:
+            return
 
-        poster_url = thumb_url
-        if poster_url.startswith("//"):
+        is_series = (
+            "مسلسل" in category_name or "أنمي" in category_name or "الحلقة" in raw_title or "الموسم" in raw_title
+        )
+        is_anime = "أنمي" in category_name or "انمي" in category_name
+
+        search_type = "tv" if is_series else "movie"
+        description, year, tmdb_poster = fetch_from_tmdb_smart(session, clean_name, search_type)
+
+        poster_url = tmdb_poster if tmdb_poster else thumb_url
+        if poster_url and poster_url.startswith("//"):
             poster_url = "https:" + poster_url
 
-        year = None
-        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", raw_title)
-        if not year_match:
-            year_match = re.search(r"\b(19\d{2}|20\d{2})\b", res.text)
-        if year_match:
-            year = int(year_match.group(1))
+        if not year:
+            year_match = re.search(r"\b(19\d{2}|20\d{2})\b", raw_title)
+            if not year_match:
+                year_match = re.search(r"\b(19\d{2}|20\d{2})\b", res.text)
+            if year_match:
+                year = int(year_match.group(1))
 
-        description = ""
-        desc_tag = soup.select_one(
-            ".StoryLine, .story, .entry-content, .post-story, .description"
-        )
-        if desc_tag:
-            description = desc_tag.get_text(strip=True)
+        if not description:
+            desc_tag = soup.select_one(
+                ".StoryLine, .story, .entry-content, .post-story, .description"
+            )
+            if desc_tag:
+                description = desc_tag.get_text(strip=True)
 
         direct_links = []
         for iframe in soup.find_all("iframe"):
@@ -125,16 +178,11 @@ def process_item(
             return
 
         primary_watch_url = direct_links[0]
-        is_series = (
-            "مسلسل" in category_name or "أنمي" in category_name or "الحلقة" in raw_title
-        )
-        is_anime = "أنمي" in category_name or "انمي" in category_name
 
         if is_series:
             target_table = "anime_items" if is_anime else "tv_series"
             series_id = None
 
-            # البحث عن المسلسل بالاسم والتصنيف لمنع التكرار
             existing_series = (
                 supabase.table(target_table)
                 .select("id")
@@ -161,7 +209,7 @@ def process_item(
                     inserted_row = insert_res.data[0]
                     if isinstance(inserted_row, dict) and "id" in inserted_row:
                         series_id = inserted_row["id"]
-                    print(f"[+] تمت إضافة المسلسل [{category_name}]: {clean_name}")
+                    print(f"[+] تمت إضافة المسلسل الأساسي: {clean_name}")
 
             if series_id:
                 if not item_exists("episodes", primary_watch_url):
@@ -176,14 +224,14 @@ def process_item(
 
                     episode_payload = {
                         "series_id": series_id,
-                        "title": clean_name,
+                        "title": raw_title,
                         "watch_url": primary_watch_url,
                         "season_number": season_num,
                         "episode_number": ep_num,
                         "direct_links": direct_links,
                     }
                     supabase.table("episodes").insert(episode_payload).execute()
-                    print(f"   [->] تمت إضافة الحلقة: {clean_name}")
+                    print(f"    [->] تمت إضافة الحلقة للمسلسل {clean_name} (موسم {season_num} - حلقة {ep_num})")
 
         else:
             target_table = "anime_items" if is_anime else "movies"
@@ -198,7 +246,9 @@ def process_item(
                     "direct_links": direct_links,
                 }
                 supabase.table(target_table).insert(movie_payload).execute()
-                print(f"[+] تمت إضافة الفيلم [{category_name}]: {clean_name}")
+                print(f"[+] تمت إضافة الفيلم: {clean_name}")
+
+        time.sleep(random.uniform(0.3, 0.6))
 
     except Exception as e:
         print(f"[-] خطأ أثناء معالجة العنصر: {e}")
