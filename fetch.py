@@ -3,8 +3,8 @@ import re
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
 
-SUPABASE_URL = "https://rtsmuwuwvvdcmzcboarq.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ0c211d3V3dnZkY216Y2JvYXJxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTEyNDI2OSwiZXhwIjoyMTAwNzAwMjY5fQ.FOOlAI0uYkOhBa9HqkrC5-W751JcOHxbSDwA5kC1zrs"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
