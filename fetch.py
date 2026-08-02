@@ -316,7 +316,7 @@ def scrape_akwam_site():
         
         page = context.new_page()
         
-     target_categories = [
+        target_categories = [
             "https://akwams.org/movies",
             "https://akwams.org/series",
             "https://akwams.org/category/movies/افلام-اجنبي",
@@ -335,13 +335,22 @@ def scrape_akwam_site():
             print(f"========================================")
             current_page_url = cat_url
             page_number = 1
+            max_pages = 9999
             
-            while current_page_url:
+            while current_page_url and page_number <= max_pages:
                 try:
-                    print(f"📄 جاري سحب الصفحة رقم ({page_number}): {current_page_url}")
+                    print(f"\n📄 جاري سحب الصفحة رقم ({page_number} من أصل {max_pages if max_pages != 9999 else '?' }): {current_page_url}")
                     page.goto(current_page_url, wait_until="domcontentloaded", timeout=25000)
                     page.wait_for_timeout(1000)
                     
+                    if page_number == 1:
+                        max_pages = page.evaluate("""() => {
+                            let pageLinks = Array.from(document.querySelectorAll('.pagination a, .pages a, a.page-link'));
+                            let numbers = pageLinks.map(el => parseInt(el.innerText.trim())).filter(n => !isNaN(n));
+                            return numbers.length > 0 ? Math.max(...numbers) : 999;
+                        }""")
+                        print(f"📌 تم اكتشاف أن هذا القسم يحتوي على {max_pages} صفحة كحد أقصى.")
+
                     item_cards = page.evaluate("""() => {
                         return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
                             if (!h || !h.includes('akwams.org')) return false;
@@ -364,34 +373,19 @@ def scrape_akwam_site():
                             if item_data and item_data.get("title"):
                                 save_to_supabase(item_data, cat_type)
                     
-                    next_page_url = page.evaluate("""(currentUrl) => {
-                        let nextBtn = document.querySelector('a.page-link[rel="next"], .pagination .next a, a:has(.fa-angle-right), a:has(.fa-chevron-right), a.next');
-                        if (nextBtn && nextBtn.href) return nextBtn.href;
-                        return null;
-                    }""", current_page_url)
-                    
-                    if not next_page_url or next_page_url == current_page_url:
-                        page_number += 1
-                        if "/page/" in current_page_url:
-                            next_page_url = re.sub(r'/page/\d+', f'/page/{page_number}', current_page_url)
-                        else:
-                            base = current_page_url.rstrip('/')
-                            next_page_url = f"{base}/page/{page_number}"
-                        
-                        page.goto(next_page_url, wait_until="domcontentloaded", timeout=15000)
-                        if "404" in page.title() or "غير موجود" in page.content() or len(page.query_selector_all('a')) < 10:
-                            print(f"🏁 وصلت لنهاية صفحات هذا القسم تماماً!")
-                            break
-                    
-                    if next_page_url and next_page_url != current_page_url:
-                        current_page_url = next_page_url
-                        page_number += 1
-                    else:
-                        print(f"🏁 انتهت صفحات هذا القسم تماماً.")
+                    if page_number >= max_pages:
+                        print(f"🏁 لقد وصلت إلى الصفحة الأخيرة ({max_pages}) من هذا القسم.")
                         break
+
+                    page_number += 1
+                    if "/page/" in current_page_url:
+                        current_page_url = re.sub(r'/page/\d+', f'/page/{page_number}', current_page_url)
+                    else:
+                        base = current_page_url.rstrip('/')
+                        current_page_url = f"{base}/page/{page_number}"
                         
                 except Exception as e:
-                    print(f"⚠️ انتهت صفحات هذا القسم أو حدث توقف مؤقت: {e}")
+                    print(f"⚠️ حدث توقف مؤقت أو انتهت صفحات القسم: {e}")
                     break
 
         browser.close()
