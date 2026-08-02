@@ -1,13 +1,17 @@
-name: Run Media Scraper
+name: Akwam Scraper
 
 on:
+  # يتيح تشغيل السكريبت يدوياً من علامة تبديل Actions في جيت هب
+  workflow_dispatch:
+  
+  # تشغيل السكريبت تلقائياً كل 12 ساعة
   schedule:
-    - cron: '0 */6 * * *' # تشغيل تلقائي كل 6 ساعات (مثلاً)
-  workflow_dispatch:      # لتمكين التشغيل اليدوي
+    - cron: '0 */12 * * *'
 
 jobs:
-  scrape-job:
+  run-scraper:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,17 +20,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
 
-      # ---> أضف هذه الخطوة لتثبيت المكتبات المطلوبة <---
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 supabase
+          pip install playwright supabase
+          python -m playwright install chromium
 
       - name: Run Scraper Script
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python -u update.py
-          
+          python fetch.py
+        env:
+          PYTHONUNBUFFERED: "1"
