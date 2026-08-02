@@ -3,8 +3,12 @@ import re
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
 
+# سحب المفاتيح بأمان من بيئة النظام (GitHub Secrets)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل صحيح.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -48,7 +52,6 @@ def extract_series_and_episode_info(full_title):
     series_title = series_title.replace("مشاهدة", "").replace("مسلسل", "").replace("مترجم", "").replace("مدبلج", "").replace("اكوام", "").replace("Akwam", "")
     series_title = series_title.split("|")[0].split("-")[0]
     
-    # تنظيف الحروف الزائدة أو الحرف المنفرد في نهاية الاسم مثل الـ "ة" الزائدة
     series_title = " ".join(series_title.split()).strip()
     words = series_title.split()
     if len(words) > 1 and len(words[-1]) == 1:
@@ -60,7 +63,8 @@ def extract_series_and_episode_info(full_title):
 def save_to_supabase(item_data, category_type):
     title = item_data.get("title", "")
     
-    if not title or title in ["ات", "جديد", "الحلقات"] or len(title) < 3:
+    unwanted_words = ["دخول", "تسجيل", "ات", "جديد", "الحلقات", "صفحة"]
+    if not title or any(w == title for w in unwanted_words) or len(title) < 3:
         return
 
     try:
@@ -179,7 +183,7 @@ def scrape_akwam_item_details(page, item_page_url):
     except:
         pass
 
-    if not title or title in ["ات", "جديد", "الحلقات"] or "اكوام" in title or len(title) < 3 or "صفحة" in title:
+    if not title or title in ["ات", "جديد", "الحلقات", "دخول"] or "اكوام" in title or len(title) < 3 or "صفحة" in title:
         return None
 
     is_series = "الحلقة" in title or "الموسم" in title or "/series/" in item_page_url
@@ -302,7 +306,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل سكريبت السحب الشامل لكل الأقسام...")
+    print("🚀 بدء تشغيل سكريبت السحب الشامل لكل الأقسام والصفحات حتى النهاية...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -336,13 +340,16 @@ def scrape_akwam_site():
 
         for cat_url in target_categories:
             print(f"\n========================================")
-            print(f"📁 الانتقال للقسم التالي: {cat_url}")
+            print(f"📁 الانتقال للقسم: {cat_url}")
             print(f"========================================")
             current_page_url = cat_url
+            page_number = 1
             
             while current_page_url:
                 try:
-                    page.goto(current_page_url, wait_until="domcontentloaded", timeout=20000)
+                    print(f"📄 جاري سحب الصفحة رقم ({page_number}): {current_page_url}")
+                    page.goto(current_page_url, wait_until="domcontentloaded", timeout=25000)
+                    page.wait_for_timeout(1000)
                     
                     item_cards = page.evaluate("""() => {
                         return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
@@ -354,7 +361,7 @@ def scrape_akwam_site():
                     }""")
                     
                     item_links = list(set(item_cards))
-                    print(f"📄 تم العثور على {len(item_links)} عنصر في هذه الصفحة، جاري المعالجة...")
+                    print(f"🔗 تم العثور على {len(item_links)} عنصر في هذه الصفحة، جاري المعالجة...")
                     
                     for link in item_links:
                         if not is_valid_link(link):
@@ -366,23 +373,38 @@ def scrape_akwam_site():
                             if item_data and item_data.get("title"):
                                 save_to_supabase(item_data, cat_type)
                     
-                    next_page_url = page.evaluate("""() => {
-                        const nextBtn = document.querySelector('a.page-link[rel="next"], .pagination .next, a:has(.fa-angle-right), a:has(.fa-chevron-right)');
-                        return nextBtn ? nextBtn.href : null;
-                    }""")
+                    next_page_url = page.evaluate("""(currentUrl) => {
+                        let nextBtn = document.querySelector('a.page-link[rel="next"], .pagination .next a, a:has(.fa-angle-right), a:has(.fa-chevron-right), a.next');
+                        if (nextBtn && nextBtn.href) return nextBtn.href;
+                        return null;
+                    }""", current_page_url)
+                    
+                    if not next_page_url or next_page_url == current_page_url:
+                        page_number += 1
+                        if "/page/" in current_page_url:
+                            next_page_url = re.sub(r'/page/\d+', f'/page/{page_number}', current_page_url)
+                        else:
+                            base = current_page_url.rstrip('/')
+                            next_page_url = f"{base}/page/{page_number}"
+                        
+                        page.goto(next_page_url, wait_until="domcontentloaded", timeout=15000)
+                        if "404" in page.title() or "غير موجود" in page.content() or len(page.query_selector_all('a')) < 10:
+                            print(f"🏁 وصلت لنهاية صفحات هذا القسم تماماً!")
+                            break
                     
                     if next_page_url and next_page_url != current_page_url:
-                        print(f"➡️ الانتقال للصفحة التالية من نفس القسم...")
                         current_page_url = next_page_url
+                        page_number += 1
                     else:
-                        print(f"🏁 انتهت صفحات هذا القسم، الانتقال للقسم التالي...")
+                        print(f"🏁 انتهت صفحات هذا القسم تماماً.")
                         break
+                        
                 except Exception as e:
-                    print(f"⚠️ خطأ مؤقت في تصفح الصفحة، الانتقال للقسم التالي: {e}")
+                    print(f"⚠️ انتهت صفحات هذا القسم أو حدث توقف مؤقت: {e}")
                     break
 
         browser.close()
-        print("\n🎉 تم الانتهاء من سحب جميع الأقسام والصفحات بنجاح تام!")
+        print("\n🎉 تم الانتهاء من سحب جميع الأقسام والصفحات حتى النهاية بنجاح تام!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
