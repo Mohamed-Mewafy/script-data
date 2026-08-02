@@ -316,26 +316,17 @@ def scrape_akwam_site():
         
         page = context.new_page()
         
-        target_categories = [
-            "https://akwams.org/category/movies/افلام",
+     target_categories = [
+            "https://akwams.org/movies",
+            "https://akwams.org/series",
             "https://akwams.org/category/movies/افلام-اجنبي",
-            "https://akwams.org/category/movies/افلام-اجنبي-مترجمه-2026",
-            "https://akwams.org/category/movies/افلام-اجنبية-مدبلجة",
+            "https://akwams.org/category/movies/افلام-عربي",
+            "https://akwams.org/category/movies/افلام-هندية",
             "https://akwams.org/category/movies/افلام-اسيوية",
             "https://akwams.org/category/movies/افلام-انمي",
-            "https://akwams.org/category/movies/افلام-تركية",
-            "https://akwams.org/category/movies/افلام-سعودية",
-            "https://akwams.org/category/movies/افلام-عربي",
-            "https://akwams.org/category/movies/افلام-كرتون",
-            "https://akwams.org/category/movies/افلام-هندية",
-            "https://akwams.org/category/movies/افلام-وثائقية",
-            "https://akwams.org/category/series/مسلسلات-رمضان-2026",
             "https://akwams.org/category/series/مسلسلات-اجنبي",
-            "https://akwams.org/category/series/مسلسلات-اسيوية",
-            "https://akwams.org/category/series/مسلسلات-انمي",
             "https://akwams.org/category/series/مسلسلات-تركية",
-            "https://akwams.org/category/series/مسلسلات-كرتون",
-            "https://akwams.org/category/series/مسلسلات-وثائقية"
+            "https://akwams.org/category/series/مسلسلات-انمي"
         ]
 
         for cat_url in target_categories:
