@@ -82,6 +82,81 @@ def extract_series_and_episode_info(full_title):
 
     return series_title if series_title else full_title, season_num, ep_num
 
+def fix_missing_posters_in_db(page):
+    print("\n🔍 جارِ فحص قاعدة البيانات لتحديث البوسترات الناقصة...")
+    
+    # 1. فحص جدول الأفلام
+    try:
+        movies_res = supabase.table("movies_cima").select("id, title, watch_url, poster_url").execute()
+        movies = movies_res.data if movies_res.data else []
+        for m in movies:
+            p_url = m.get("poster_url")
+            if not p_url or p_url == "غير متوفر":
+                item_url = m.get("watch_url")
+                if item_url:
+                    if "/watch" in item_url:
+                        item_url = item_url.replace("/watch", "").rstrip('/')
+                    print(f"🖼️ تحديث بوستر الفيلم: {m.get('title')}")
+                    new_poster = fetch_poster_only(page, item_url)
+                    if new_poster and new_poster != "غير متوفر":
+                        supabase.table("movies_cima").update({"poster_url": new_poster}).eq("id", m["id"]).execute()
+                        print(f"✅ تم تحديث بوستر الفيلم بنجاح.")
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء فحص بوسترات الأفلام: {e}")
+
+    # 2. فحص جدول المسلسلات
+    try:
+        series_res = supabase.table("tv_series").select("id, title, watch_url, poster_url").execute()
+        series_list = series_res.data if series_res.data else []
+        for s in series_list:
+            p_url = s.get("poster_url")
+            if not p_url or p_url == "غير متوفر":
+                item_url = s.get("watch_url")
+                if item_url:
+                    if "/watch" in item_url:
+                        item_url = item_url.replace("/watch", "").rstrip('/')
+                    print(f"🖼️ تحديث بوستر المسلسل: {s.get('title')}")
+                    new_poster = fetch_poster_only(page, item_url)
+                    if new_poster and new_poster != "غير متوفر":
+                        supabase.table("tv_series").update({"poster_url": new_poster}).eq("id", s["id"]).execute()
+                        print(f"✅ تم تحديث بوستر المسلسل بنجاح.")
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء فحص بوسترات المسلسلات: {e}")
+        
+    print("✨ انتهى فحص وتحديث البوسترات القديمة، جارِ الانتقال للسحب الجديد...\n")
+
+def fetch_poster_only(page, item_page_url):
+    try:
+        page.goto(item_page_url, wait_until="domcontentloaded", timeout=10000)
+        return page.evaluate("""() => {
+            let metaImg = document.querySelector('meta[property="og:image"]') || document.querySelector('meta[name="twitter:image"]');
+            if (metaImg && metaImg.content && metaImg.content.startsWith('http')) {
+                return metaImg.content;
+            }
+            const selectors = ['.entry-image img', '.poster img', '.movie-poster img', '.details-img img', '.img-fluid', '.card-img-top'];
+            for (let sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    const src = el.src || el.getAttribute('data-src') || el.getAttribute('data-lazy-src');
+                    if (src && !src.includes('logo') && !src.includes('traincdn') && src.startsWith('http')) {
+                        return src;
+                    }
+                }
+            }
+            let allImages = Array.from(document.querySelectorAll('img'));
+            for (let img of allImages) {
+                let src = img.src || img.getAttribute('data-src');
+                if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('icon')) {
+                    if (src.includes('uploads') || src.includes('storage') || src.includes('images')) {
+                        return src;
+                    }
+                }
+            }
+            return "غير متوفر";
+        }""")
+    except:
+        return "غير متوفر"
+
 def save_to_supabase(item_data, category_type, current_cat_url):
     title = item_data.get("title", "")
     watch_url = item_data.get("watch_url", "")
@@ -114,9 +189,15 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
             }
             
-            existing = supabase.table(table_name).select("id").eq("title", title).execute()
+            existing = supabase.table(table_name).select("id, poster_url").eq("title", title).execute()
             if existing.data and len(existing.data) > 0:
-                print(f"⏭️ [موجود مسبقاً]: {title}")
+                row = existing.data[0]
+                # إذا الفيلم موجود ولكن البوستر غير متوفر، قم بتحديثه
+                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
+                    supabase.table(table_name).update({"poster_url": item_data.get("poster_url")}).eq("id", row["id"]).execute()
+                    print(f"🔄 [تم تحديث البوستر لفيلم موجود]: {title}")
+                else:
+                    print(f"⏭️ [موجود مسبقاً]: {title}")
                 return
 
             supabase.table(table_name).insert(payload).execute()
@@ -125,10 +206,14 @@ def save_to_supabase(item_data, category_type, current_cat_url):
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
             
-            series_existing = supabase.table("tv_series").select("id").eq("title", series_title).execute()
+            series_existing = supabase.table("tv_series").select("id, poster_url").eq("title", series_title).execute()
             
             if series_existing.data and len(series_existing.data) > 0:
                 series_id = series_existing.data[0]["id"]
+                row = series_existing.data[0]
+                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
+                    supabase.table("tv_series").update({"poster_url": item_data.get("poster_url")}).eq("id", series_id).execute()
+                    print(f"🔄 [تم تحديث البوستر لمسلسل موجود]: {series_title}")
             else:
                 series_payload = {
                     "title": series_title,
@@ -218,12 +303,27 @@ def scrape_akwam_item_details(page, item_page_url):
     poster = "غير متوفر"
     try:
         poster = page.evaluate("""() => {
-            const selectors = ['.entry-image img', '.poster img', '.movie-poster img', '.details-img img', '.img-fluid', 'meta[property="og:image"]'];
+            let metaImg = document.querySelector('meta[property="og:image"]') || document.querySelector('meta[name="twitter:image"]');
+            if (metaImg && metaImg.content && metaImg.content.startsWith('http')) {
+                return metaImg.content;
+            }
+            const selectors = ['.entry-image img', '.poster img', '.movie-poster img', '.details-img img', '.img-fluid', '.card-img-top'];
             for (let sel of selectors) {
                 const el = document.querySelector(sel);
                 if (el) {
-                    const src = el.src || el.getAttribute('data-src') || el.content;
-                    if (src && !src.includes('logo') && !src.includes('traincdn') && src.startsWith('http')) return src;
+                    const src = el.src || el.getAttribute('data-src') || el.getAttribute('data-lazy-src');
+                    if (src && !src.includes('logo') && !src.includes('traincdn') && src.startsWith('http')) {
+                        return src;
+                    }
+                }
+            }
+            let allImages = Array.from(document.querySelectorAll('img'));
+            for (let img of allImages) {
+                let src = img.src || img.getAttribute('data-src');
+                if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('icon')) {
+                    if (src.includes('uploads') || src.includes('storage') || src.includes('images')) {
+                        return src;
+                    }
                 }
             }
             return "غير متوفر";
@@ -287,7 +387,6 @@ def scrape_akwam_item_details(page, item_page_url):
     except:
         pass
 
-    # إذا لم يجد روابط في صفحة الـ watch، سنستخدم رابط صفحة الفيلم نفسها كبديل لكي لا يضيع الفيلم أبدًا
     final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else item_page_url
 
     direct_links_json = {
@@ -309,7 +408,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل السحب الشامل (بدون أي تخطي للعناصر)...")
+    print("🚀 بدء تشغيل السكربت مع فحص وتحديث البوسترات الناقصة...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -318,6 +417,9 @@ def scrape_akwam_site():
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
         
         page = context.new_page()
+        
+        # تنفيذ فحص وتحديث البوسترات للبيانات الموجودة مسبقاً أولاً
+        fix_missing_posters_in_db(page)
         
         target_categories = [
             "https://akwams.org/movies",
@@ -395,7 +497,7 @@ def scrape_akwam_site():
                     break
 
         browser.close()
-        print("\n🎉 تمت العملية بنجاح ولن يتم تفويت أي عنصر!")
+        print("\n🎉 تمت العملية بنجاح وتحديث جميع البوسترات!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
