@@ -173,7 +173,6 @@ def save_to_supabase(item_data, category_type, current_cat_url):
         if category_type == "movie":
             table_name = "movies_cima"
             
-            # فحص ما إذا كان الفيلم موجوداً بالاسم
             existing = supabase.table(table_name).select("id, watch_url, poster_url").eq("title", title).execute()
             
             if existing.data and len(existing.data) > 0:
@@ -182,12 +181,10 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 old_watch_url = row.get("watch_url")
                 
                 updates = {}
-                # إذا كان الرابط القديم about:blank والرابط الجديد حقيقي، قم بتحديثه
                 if old_watch_url == "about:blank" and watch_url and watch_url != "about:blank":
                     updates["watch_url"] = watch_url
-                    print( تصحيح رابط المشاهدة القديم لـ about:blank بـ: {title})
+                    print(f"🔄 [تصحيح رابط المشاهدة القديم لـ about:blank]: {title}")
                 
-                # تحديث البوستر إذا كان ناقصاً
                 if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
                     updates["poster_url"] = item_data.get("poster_url")
                 
