@@ -35,6 +35,27 @@ def clean_text(text):
     text = re.sub(r'[\"\'\[\]\{\}]', '', text)
     return " ".join(text.split()).strip()
 
+def is_link_actually_working(page, url):
+    """فحص رابط السيفر باستخدام المتصفح للتأكد من عدم وجود رسالة Not Found"""
+    if not url:
+        return False
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=10000)
+        page.wait_for_timeout(1000)
+        
+        has_error_box = page.evaluate("""() => {
+            const text = document.body ? document.body.innerText : '';
+            return text.includes('Not Found') || text.includes('not found') || text.includes('no_video');
+        }""")
+        
+        if has_error_box:
+            return False
+            
+        return True
+    except:
+        pass
+    return False
+
 def extract_category_from_url_or_page(cat_url, page_genres, title):
     url_lower = cat_url.lower()
     if "اجنبي" in url_lower:
@@ -97,8 +118,8 @@ def save_to_supabase(item_data, category_type, current_cat_url):
     title = item_data.get("title", "")
     watch_url = item_data.get("watch_url", "")
 
-    if not watch_url or "/watch" in watch_url or not any(domain in watch_url for domain in STREAMING_DOMAINS):
-        print(f"⏭️ [تم التخطي]: {title} (لا يوجد سيفر مباشر)")
+    if not watch_url or "/watch" in watch_url:
+        print(f"⏭️ [تم التخطي]: {title}")
         return
     
     unwanted_words = ["دخول", "تسجيل", "ات", "جديد", "الحلقات", "صفحة"]
@@ -127,11 +148,11 @@ def save_to_supabase(item_data, category_type, current_cat_url):
             
             existing = supabase.table(table_name).select("id").eq("title", title).execute()
             if existing.data and len(existing.data) > 0:
-                print(f"⏭️ [تم التخطي]: {title} (موجود مسبقاً)")
+                print(f"⏭️ [تم التخطي]: {title}")
                 return
 
             supabase.table(table_name).insert(payload).execute()
-            print(f"✅ [تم الرفع]: {title}")
+            print(f"✅ [تم الرفع مع عدة سيرفرات]: {title}")
 
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
@@ -159,7 +180,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                     if re_check.data:
                         series_id = re_check.data[0]["id"]
                     else:
-                        print(f"⏭️ [تم التخطي]: {series_title} (فشل إنشاء المسلسل)")
+                        print(f"⏭️ [تم التخطي]: {series_title}")
                         return
 
             episode_table = "episodes_cima"
@@ -174,14 +195,14 @@ def save_to_supabase(item_data, category_type, current_cat_url):
 
             existing_ep = supabase.table(episode_table).select("id").eq("watch_url", watch_url).execute()
             if existing_ep.data and len(existing_ep.data) > 0:
-                print(f"⏭️ [تم التخطي]: {title} (الحلقة موجودة مسبقاً)")
+                print(f"⏭️ [تم التخطي]: {title}")
                 return
 
             supabase.table(episode_table).insert(episode_payload).execute()
-            print(f"✅ [تم الرفع]: {series_title} - حلقة {episode_num}")
+            print(f"✅ [تم الرفع مع عدة سيرفرات]: {series_title} - حلقة {episode_num}")
 
     except Exception as e:
-        print(f"⏭️ [تم التخطي]: {title} (خطأ: {str(e)})")
+        print(f"⏭️ [تم التخطي]: {title}")
         
 def clean_title(raw_title):
     title = raw_title.replace("مشاهدة", "").replace("فيلم", "").replace("مسلسل", "")
@@ -318,41 +339,35 @@ def scrape_akwam_item_details(page, item_page_url):
     except:
         pass
 
-    final_watch_url = None
-    direct_streaming_links = []
-    found_valid_server = False
+    # جمع كافة الروابط والسيرفرات الشغالة حقاً وفحصها
+    working_streaming_links = []
 
+    # 1. فحص الروابط المستخرجة مباشرة من الإطارات
     for link in extracted_streaming_links:
         for domain in STREAMING_DOMAINS:
             if domain in link:
-                final_watch_url = link
-                found_valid_server = True
-                break
-        if found_valid_server:
-            break
+                if is_link_actually_working(page, link):
+                    if link not in working_streaming_links:
+                        working_streaming_links.append(link)
 
-    if not found_valid_server and item_identifiers:
-        for identifier in item_identifiers:
-            for domain in STREAMING_DOMAINS:
-                candidate_url = f"{domain}{identifier}"
-                final_watch_url = candidate_url
-                found_valid_server = True
-                break
-            if found_valid_server:
-                break
-
-    if not found_valid_server:
-        return None
-
+    # 2. توليد الروابط عبر الـ Identifiers المتاحة وفحصها لضمان جمع أكبر عدد من السيرفرات البديلة
     if item_identifiers:
         for identifier in item_identifiers:
             for domain in STREAMING_DOMAINS:
-                alt_link = f"{domain}{identifier}"
-                if alt_link != final_watch_url and alt_link not in direct_streaming_links:
-                    direct_streaming_links.append(alt_link)
+                candidate_url = f"{domain}{identifier}"
+                if is_link_actually_working(page, candidate_url):
+                    if candidate_url not in working_streaming_links:
+                        working_streaming_links.append(candidate_url)
+
+    if not working_streaming_links:
+        return None
+
+    # تعيين أول سيرفر شغال كـ watch_url رئيسي والباقي كروابط بديلة
+    final_watch_url = working_streaming_links[0]
+    alternative_links = working_streaming_links[1:] # الباقي سيرفرات احتياطية
 
     direct_links_json = {
-        "streaming_links": list(set(direct_streaming_links)),
+        "streaming_links": list(set(working_streaming_links)),
         "download_links": []
     }
 
@@ -370,7 +385,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل السحب...")
+    print("🚀 بدء تشغيل السحب مع جمع وفحص كافة السيرفرات البديلة...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
