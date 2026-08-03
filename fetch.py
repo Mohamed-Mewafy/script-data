@@ -1,5 +1,8 @@
 import os
 import re
+import urllib.parse
+import urllib.request
+import json
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
 
@@ -23,6 +26,29 @@ def clean_text(text):
         return ""
     text = re.sub(r'[\"\'\[\]\{\}]', '', text)
     return " ".join(text.split()).strip()
+
+def get_tmdb_poster(title):
+    try:
+        clean_name = re.sub(r'[\d\-\_\:\,\.\(\)]', ' ', title)
+        clean_name = clean_text(clean_name)
+        if not clean_name or len(clean_name) < 2:
+            return "غير متوفر"
+        
+        query = urllib.parse.quote(clean_name)
+        url = f"https://api.themoviedb.org/3/search/multi?api_key=db974b934b9cfda89f5bc3a6a12b7f75&query={query}&language=ar"
+        
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            results = data.get("results", [])
+            for res in results:
+                poster_path = res.get("poster_path")
+                if poster_path:
+                    return f"https://image.tmdb.org/t/p/w500{poster_path}"
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء البحث في TMDB للعنوان '{title}': {e}")
+    
+    return "غير متوفر"
 
 def extract_category_from_url_or_page(cat_url, page_genres, title):
     url_lower = cat_url.lower()
@@ -89,16 +115,23 @@ def fix_missing_posters_in_db(page):
         movies = movies_res.data if movies_res.data else []
         for m in movies:
             p_url = m.get("poster_url")
+            title = m.get("title")
             if not p_url or p_url == "غير متوفر":
                 item_url = m.get("watch_url")
+                new_poster = "غير متوفر"
                 if item_url and item_url != "about:blank":
                     if "/watch" in item_url:
                         item_url = item_url.replace("/watch", "").rstrip('/')
-                    print(f"🖼️ تحديث بوستر الفيلم: {m.get('title')}")
+                    print(f"🖼️ محاولة جلب بوستر الفيلم محلياً: {title}")
                     new_poster = fetch_poster_only(page, item_url)
-                    if new_poster and new_poster != "غير متوفر":
-                        supabase.table("movies_cima").update({"poster_url": new_poster}).eq("id", m["id"]).execute()
-                        print(f"✅ تم تحديث بوستر الفيلم بنجاح.")
+                
+                if not new_poster or new_poster == "غير متوفر":
+                    print(f"🌐 جارِ البحث عن بوستر الفيلم في TMDB: {title}")
+                    new_poster = get_tmdb_poster(title)
+
+                if new_poster and new_poster != "غير متوفر":
+                    supabase.table("movies_cima").update({"poster_url": new_poster}).eq("id", m["id"]).execute()
+                    print(f"✅ تم تحديث بوستر الفيلم بنجاح.")
     except Exception as e:
         print(f"⚠️ خطأ أثناء فحص بوسترات الأفلام: {e}")
 
@@ -107,16 +140,23 @@ def fix_missing_posters_in_db(page):
         series_list = series_res.data if series_res.data else []
         for s in series_list:
             p_url = s.get("poster_url")
+            title = s.get("title")
             if not p_url or p_url == "غير متوفر":
                 item_url = s.get("watch_url")
+                new_poster = "غير متوفر"
                 if item_url and item_url != "about:blank":
                     if "/watch" in item_url:
                         item_url = item_url.replace("/watch", "").rstrip('/')
-                    print(f"🖼️ تحديث بوستر المسلسل: {s.get('title')}")
+                    print(f"🖼️ محاولة جلب بوستر المسلسل محلياً: {title}")
                     new_poster = fetch_poster_only(page, item_url)
-                    if new_poster and new_poster != "غير متوفر":
-                        supabase.table("tv_series").update({"poster_url": new_poster}).eq("id", s["id"]).execute()
-                        print(f"✅ تم تحديث بوستر المسلسل بنجاح.")
+                
+                if not new_poster or new_poster == "غير متوفر":
+                    print(f"🌐 جارِ البحث عن بوستر المسلسل في TMDB: {title}")
+                    new_poster = get_tmdb_poster(title)
+
+                if new_poster and new_poster != "غير متوفر":
+                    supabase.table("tv_series").update({"poster_url": new_poster}).eq("id", s["id"]).execute()
+                    print(f"✅ تم تحديث بوستر المسلسل بنجاح.")
     except Exception as e:
         print(f"⚠️ خطأ أثناء فحص بوسترات المسلسلات: {e}")
         
@@ -170,6 +210,12 @@ def save_to_supabase(item_data, category_type, current_cat_url):
         clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
         cleaned_genres = [clean_text(g) for g in raw_genres if clean_text(g)]
 
+        # التحقق من توفر البستر أو جلبه من TMDB إن لم يكن متوفراً
+        poster_url = item_data.get("poster_url", "غير متوفر")
+        if not poster_url or poster_url == "غير متوفر":
+            print(f"🌐 جارِ جلب البوستر من TMDB للعنوان: {title}")
+            poster_url = get_tmdb_poster(title)
+
         if category_type == "movie":
             table_name = "movies_cima"
             
@@ -185,8 +231,8 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                     updates["watch_url"] = watch_url
                     print(f"🔄 [تصحيح رابط المشاهدة القديم لـ about:blank]: {title}")
                 
-                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
-                    updates["poster_url"] = item_data.get("poster_url")
+                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and poster_url != "غير متوفر":
+                    updates["poster_url"] = poster_url
                 
                 if updates:
                     supabase.table(table_name).update(updates).eq("id", row_id).execute()
@@ -198,7 +244,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
             payload = {
                 "title": title,
                 "watch_url": watch_url,
-                "poster_url": item_data.get("poster_url", "غير متوفر"),
+                "poster_url": poster_url,
                 "category_type": clean_category,
                 "year": int(item_data["year"]) if item_data.get("year") else None,
                 "description": item_data.get("description", "غير متوفر"),
@@ -213,6 +259,9 @@ def save_to_supabase(item_data, category_type, current_cat_url):
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
             
+            # إذا كان مسلسل، نتحقق من بوستر المسلسل الأساسي أيضاً عبر TMDB لو غير موجود
+            series_poster = poster_url
+            
             series_existing = supabase.table("tv_series").select("id, watch_url, poster_url").eq("title", series_title).execute()
             
             if series_existing.data and len(series_existing.data) > 0:
@@ -224,16 +273,22 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 if old_watch_url == "about:blank" and watch_url and watch_url != "about:blank":
                     updates["watch_url"] = watch_url
                 
-                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
-                    updates["poster_url"] = item_data.get("poster_url")
+                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر"):
+                    if series_poster == "غير متوفر":
+                        series_poster = get_tmdb_poster(series_title)
+                    if series_poster != "غير متوفر":
+                        updates["poster_url"] = series_poster
                 
                 if updates:
                     supabase.table("tv_series").update(updates).eq("id", series_id).execute()
                     print(f"🔄 [تم تحديث بيانات المسلسل]: {series_title}")
             else:
+                if series_poster == "غير متوفر":
+                    series_poster = get_tmdb_poster(series_title)
+                    
                 series_payload = {
                     "title": series_title,
-                    "poster_url": item_data.get("poster_url", "غير متوفر"),
+                    "poster_url": series_poster,
                     "category_type": clean_category,
                     "year": int(item_data["year"]) if item_data.get("year") else None,
                     "description": item_data.get("description", "غير متوفر"),
@@ -429,7 +484,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل السكربت مع تصحيح روابط about:blank تلقائياً...")
+    print("🚀 بدء تشغيل السكربت مع البحث التلقائي عن البوسترات في TMDB...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
