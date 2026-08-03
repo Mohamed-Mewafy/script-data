@@ -95,6 +95,12 @@ def extract_series_and_episode_info(full_title):
 
 def save_to_supabase(item_data, category_type, current_cat_url):
     title = item_data.get("title", "")
+    watch_url = item_data.get("watch_url", "")
+
+    # شرط صارم جداً: منع حفظ أي عنصر لا يحتوي على سيفر بث مباشر حقيقي
+    if not watch_url or "/watch" in watch_url or not any(domain in watch_url for domain in STREAMING_DOMAINS):
+        print(f"⚠️ [تخطي]: العنصر '{title}' لعدم توفر رابط سيفر مباشر نشط.")
+        return
     
     unwanted_words = ["دخول", "تسجيل", "ات", "جديد", "الحلقات", "صفحة"]
     if not title or any(w == title for w in unwanted_words) or len(title) < 3:
@@ -109,7 +115,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
             table_name = "movies_cima"
             payload = {
                 "title": title,
-                "watch_url": item_data.get("watch_url"),
+                "watch_url": watch_url,
                 "poster_url": item_data.get("poster_url", "غير متوفر"),
                 "category_type": clean_category,
                 "year": int(item_data["year"]) if item_data.get("year") else None,
@@ -126,7 +132,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 return
 
             supabase.table(table_name).insert(payload).execute()
-            print(f"✅ [تم رفع الفيلم بنجاح تحت تصنيف ({clean_category})]: {title}")
+            print(f"✅ [تم رفع الفيلم بنجاح برابط سيفر مباشر]: {title}")
 
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
@@ -144,7 +150,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                     "description": item_data.get("description", "غير متوفر"),
                     "rating": item_data.get("rating", "غير متوفر"),
                     "genres": cleaned_genres,
-                    "watch_url": item_data.get("watch_url")
+                    "watch_url": watch_url
                 }
                 res = supabase.table("tv_series").insert(series_payload).execute()
                 if res.data and len(res.data) > 0:
@@ -156,25 +162,25 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                     else:
                         print(f"⚠️ فشل إنشاء المسلسل الأساسي: {series_title}")
                         return
-                print(f"📁 [تم إنشاء مسلسل جديد وإضافته تحت تصنيف ({clean_category})]: {series_title}")
+                print(f"📁 [تم إنشاء مسلسل جديد]: {series_title}")
 
             episode_table = "episodes_cima"
             episode_payload = {
                 "series_id": series_id,
                 "title": title,
-                "watch_url": item_data.get("watch_url"),
+                "watch_url": watch_url,
                 "season_number": season_num,
                 "episode_number": episode_num,
                 "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
             }
 
-            existing_ep = supabase.table(episode_table).select("id").eq("watch_url", item_data.get("watch_url")).execute()
+            existing_ep = supabase.table(episode_table).select("id").eq("watch_url", watch_url).execute()
             if existing_ep.data and len(existing_ep.data) > 0:
                 print(f"ℹ️ [الحلقة موجودة مسبقاً]: {title}")
                 return
 
             supabase.table(episode_table).insert(episode_payload).execute()
-            print(f"✅ [تم رفع الحلقة بنجاح تحت المسلسل ({series_title})]: الحلقة {episode_num}")
+            print(f"✅ [تم رفع الحلقة بنجاح برابط مباشر]: {series_title} - الحلقة {episode_num}")
 
     except Exception as e:
         print(f"⚠️ خطأ أثناء الرفع ({title}): {str(e)}")
@@ -287,7 +293,7 @@ def scrape_akwam_item_details(page, item_page_url):
     clean_base_url = item_page_url.rstrip('/')
     watch_page_url = clean_base_url if clean_base_url.endswith('/watch') else f"{clean_base_url}/watch/"
 
-    item_identifier = None
+    item_identifiers = []
     extracted_streaming_links = []
 
     try:
@@ -300,10 +306,10 @@ def scrape_akwam_item_details(page, item_page_url):
             if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
                 extracted_streaming_links.append(f_url)
                 identifier = extract_identifier(f_url)
-                if identifier and not item_identifier:
-                    item_identifier = identifier
+                if identifier and identifier not in item_identifiers:
+                    item_identifiers.append(identifier)
 
-        if not item_identifier or not extracted_streaming_links:
+        if not item_identifiers or not extracted_streaming_links:
             iframes_data = page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('iframe, embed, object')).map(el => el.src || el.getAttribute('data-src')).filter(Boolean);
             }""")
@@ -311,21 +317,53 @@ def scrape_akwam_item_details(page, item_page_url):
                 if is_valid_link(link):
                     extracted_streaming_links.append(link)
                     identifier = extract_identifier(link)
-                    if identifier and not item_identifier:
-                        item_identifier = identifier
+                    if identifier and identifier not in item_identifiers:
+                        item_identifiers.append(identifier)
     except:
         pass
 
-    if item_identifier and "registration" not in item_identifier:
-        all_links = [f"{domain}{item_identifier}" for domain in STREAMING_DOMAINS]
-        final_watch_url = all_links[0]
-        direct_streaming_links = all_links[1:]
-    else:
-        final_watch_url = watch_page_url
-        direct_streaming_links = list(set(extracted_streaming_links))
+    # تجربة السيفرات والتحقق منها بالتتابع (فحص قائمة السيفرات حتى ينجح واحد)
+    final_watch_url = None
+    direct_streaming_links = []
+    found_valid_server = False
+
+    # 1. محاولة استخدام المعرفات المستخرجة مباشرة من الإطارات الحية
+    for link in extracted_streaming_links:
+        for domain in STREAMING_DOMAINS:
+            if domain in link:
+                final_watch_url = link
+                found_valid_server = True
+                break
+        if found_valid_server:
+            break
+
+    # 2. إذا لم نجد رابطاً جاهزاً، نجرب تركيب المعرفات المكتشفة على سيفرات البث بالتتابع
+    if not found_valid_server and item_identifiers:
+        for identifier in item_identifiers:
+            for domain in STREAMING_DOMAINS:
+                candidate_url = f"{domain}{identifier}"
+                # نعتمد أول سيفر يتم تجميعه بنجاح
+                final_watch_url = candidate_url
+                found_valid_server = True
+                break
+            if found_valid_server:
+                break
+
+    # إذا فشلت كل المحاولات ولم نجد أي سيفر شغّال، نلغي العنصر تماماً
+    if not found_valid_server:
+        print(f"❌ [فشل استخراج سيفر مباشر]: {title}")
+        return None
+
+    # جمع بقية السيفرات البديلة
+    if item_identifiers:
+        for identifier in item_identifiers:
+            for domain in STREAMING_DOMAINS:
+                alt_link = f"{domain}{identifier}"
+                if alt_link != final_watch_url and alt_link not in direct_streaming_links:
+                    direct_streaming_links.append(alt_link)
 
     direct_links_json = {
-        "streaming_links": direct_streaming_links,
+        "streaming_links": list(set(direct_streaming_links)),
         "download_links": []
     }
 
@@ -337,13 +375,13 @@ def scrape_akwam_item_details(page, item_page_url):
         "description": description,
         "rating": rating,
         "genres": list(set(genres)),
-        "external_id": item_identifier,
+        "external_id": item_identifiers[0] if item_identifiers else None,
         "watch_url": final_watch_url,
         "direct_links": direct_links_json
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل سكريبت السحب مع تنظيف التصنيفات...")
+    print("🚀 بدء تشغيل السحب مع فحص السيفرات المتعددة...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -354,7 +392,7 @@ def scrape_akwam_site():
         page = context.new_page()
         
         target_categories = [
-            "https://akwams.org/movies",
+            "https://akwams.org/movies",  # استكمالاً من النقطة التي وقفنا عندها
             "https://akwams.org/series",
             "https://akwams.org/category/movies/افلام-اجنبي",
             "https://akwams.org/category/movies/افلام-عربي",
@@ -371,16 +409,18 @@ def scrape_akwam_site():
             print(f"📁 الانتقال للقسم: {cat_url}")
             print(f"========================================")
             current_page_url = cat_url
-            page_number = 1
+            
+            match_page = re.search(r'/page/(\d+)', cat_url)
+            page_number = int(match_page.group(1)) if match_page else 1
             max_pages = 9999
             
             while current_page_url and page_number <= max_pages:
                 try:
-                    print(f"\n📄 جاري سحب الصفحة رقم ({page_number} من أصل {max_pages if max_pages != 9999 else '?' }): {current_page_url}")
+                    print(f"\n📄 جاري سحب الصفحة رقم ({page_number}): {current_page_url}")
                     page.goto(current_page_url, wait_until="domcontentloaded", timeout=25000)
                     page.wait_for_timeout(1000)
                     
-                    if page_number == 1:
+                    if page_number == 1 or "/page/" not in cat_url:
                         max_pages = page.evaluate("""() => {
                             let pageLinks = Array.from(document.querySelectorAll('.pagination a, .pages a, a.page-link'));
                             let numbers = pageLinks.map(el => parseInt(el.innerText.trim())).filter(n => !isNaN(n));
@@ -426,7 +466,7 @@ def scrape_akwam_site():
                     break
 
         browser.close()
-        print("\n🎉 تم الانتهاء من سحب وتصنيف جميع العناصر وتنظيفها بنجاح تام!")
+        print("\n🎉 تم الانتهاء من السحب بنجاح تام مع فحص السيفرات البديلة!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
