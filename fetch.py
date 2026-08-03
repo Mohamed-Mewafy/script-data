@@ -84,8 +84,6 @@ def extract_series_and_episode_info(full_title):
 
 def fix_missing_posters_in_db(page):
     print("\n🔍 جارِ فحص قاعدة البيانات لتحديث البوسترات الناقصة...")
-    
-    # 1. فحص جدول الأفلام
     try:
         movies_res = supabase.table("movies_cima").select("id, title, watch_url, poster_url").execute()
         movies = movies_res.data if movies_res.data else []
@@ -93,7 +91,7 @@ def fix_missing_posters_in_db(page):
             p_url = m.get("poster_url")
             if not p_url or p_url == "غير متوفر":
                 item_url = m.get("watch_url")
-                if item_url:
+                if item_url and item_url != "about:blank":
                     if "/watch" in item_url:
                         item_url = item_url.replace("/watch", "").rstrip('/')
                     print(f"🖼️ تحديث بوستر الفيلم: {m.get('title')}")
@@ -104,7 +102,6 @@ def fix_missing_posters_in_db(page):
     except Exception as e:
         print(f"⚠️ خطأ أثناء فحص بوسترات الأفلام: {e}")
 
-    # 2. فحص جدول المسلسلات
     try:
         series_res = supabase.table("tv_series").select("id, title, watch_url, poster_url").execute()
         series_list = series_res.data if series_res.data else []
@@ -112,7 +109,7 @@ def fix_missing_posters_in_db(page):
             p_url = s.get("poster_url")
             if not p_url or p_url == "غير متوفر":
                 item_url = s.get("watch_url")
-                if item_url:
+                if item_url and item_url != "about:blank":
                     if "/watch" in item_url:
                         item_url = item_url.replace("/watch", "").rstrip('/')
                     print(f"🖼️ تحديث بوستر المسلسل: {s.get('title')}")
@@ -161,12 +158,11 @@ def save_to_supabase(item_data, category_type, current_cat_url):
     title = item_data.get("title", "")
     watch_url = item_data.get("watch_url", "")
 
-    if not watch_url:
-        print(f"⏭️ [تخطي لعدم وجود رابط]: {title}")
+    if not title or len(title) < 3:
         return
-    
+
     unwanted_words = ["دخول", "تسجيل", "ات", "جديد", "الحلقات", "صفحة"]
-    if not title or any(w == title for w in unwanted_words) or len(title) < 3:
+    if any(w == title for w in unwanted_words):
         return
 
     try:
@@ -176,6 +172,32 @@ def save_to_supabase(item_data, category_type, current_cat_url):
 
         if category_type == "movie":
             table_name = "movies_cima"
+            
+            # فحص ما إذا كان الفيلم موجوداً بالاسم
+            existing = supabase.table(table_name).select("id, watch_url, poster_url").eq("title", title).execute()
+            
+            if existing.data and len(existing.data) > 0:
+                row = existing.data[0]
+                row_id = row["id"]
+                old_watch_url = row.get("watch_url")
+                
+                updates = {}
+                # إذا كان الرابط القديم about:blank والرابط الجديد حقيقي، قم بتحديثه
+                if old_watch_url == "about:blank" and watch_url and watch_url != "about:blank":
+                    updates["watch_url"] = watch_url
+                    print( تصحيح رابط المشاهدة القديم لـ about:blank بـ: {title})
+                
+                # تحديث البوستر إذا كان ناقصاً
+                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
+                    updates["poster_url"] = item_data.get("poster_url")
+                
+                if updates:
+                    supabase.table(table_name).update(updates).eq("id", row_id).execute()
+                    print(f"🔄 [تم تحديث بيانات الفيلم]: {title}")
+                else:
+                    print(f"⏭️ [موجود مسبقاً وببيانات كاملة]: {title}")
+                return
+
             payload = {
                 "title": title,
                 "watch_url": watch_url,
@@ -188,32 +210,29 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 "external_id": item_data.get("external_id"),
                 "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
             }
-            
-            existing = supabase.table(table_name).select("id, poster_url").eq("title", title).execute()
-            if existing.data and len(existing.data) > 0:
-                row = existing.data[0]
-                # إذا الفيلم موجود ولكن البوستر غير متوفر، قم بتحديثه
-                if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
-                    supabase.table(table_name).update({"poster_url": item_data.get("poster_url")}).eq("id", row["id"]).execute()
-                    print(f"🔄 [تم تحديث البوستر لفيلم موجود]: {title}")
-                else:
-                    print(f"⏭️ [موجود مسبقاً]: {title}")
-                return
-
             supabase.table(table_name).insert(payload).execute()
             print(f"✅ [تم الرفع - فيلم]: {title}")
 
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
             
-            series_existing = supabase.table("tv_series").select("id, poster_url").eq("title", series_title).execute()
+            series_existing = supabase.table("tv_series").select("id, watch_url, poster_url").eq("title", series_title).execute()
             
             if series_existing.data and len(series_existing.data) > 0:
                 series_id = series_existing.data[0]["id"]
                 row = series_existing.data[0]
+                old_watch_url = row.get("watch_url")
+                
+                updates = {}
+                if old_watch_url == "about:blank" and watch_url and watch_url != "about:blank":
+                    updates["watch_url"] = watch_url
+                
                 if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and item_data.get("poster_url") != "غير متوفر":
-                    supabase.table("tv_series").update({"poster_url": item_data.get("poster_url")}).eq("id", series_id).execute()
-                    print(f"🔄 [تم تحديث البوستر لمسلسل موجود]: {series_title}")
+                    updates["poster_url"] = item_data.get("poster_url")
+                
+                if updates:
+                    supabase.table("tv_series").update(updates).eq("id", series_id).execute()
+                    print(f"🔄 [تم تحديث بيانات المسلسل]: {series_title}")
             else:
                 series_payload = {
                     "title": series_title,
@@ -237,6 +256,17 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                         return
 
             episode_table = "episodes_cima"
+            existing_ep = supabase.table(episode_table).select("id, watch_url").eq("series_id", series_id).eq("season_number", season_num).eq("episode_number", episode_num).execute()
+            
+            if existing_ep.data and len(existing_ep.data) > 0:
+                ep_row = existing_ep.data[0]
+                if ep_row.get("watch_url") == "about:blank" and watch_url and watch_url != "about:blank":
+                    supabase.table(episode_table).update({"watch_url": watch_url}).eq("id", ep_row["id"]).execute()
+                    print(f"🔄 [تم تحديث رابط الحلقة]: {title}")
+                else:
+                    print(f"⏭️ [الحلقة موجودة مسبقاً]: {title}")
+                return
+
             episode_payload = {
                 "series_id": series_id,
                 "title": title,
@@ -245,12 +275,6 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 "episode_number": episode_num,
                 "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
             }
-
-            existing_ep = supabase.table(episode_table).select("id").eq("watch_url", watch_url).execute()
-            if existing_ep.data and len(existing_ep.data) > 0:
-                print(f"⏭️ [الحلقة موجودة مسبقاً]: {title}")
-                return
-
             supabase.table(episode_table).insert(episode_payload).execute()
             print(f"✅ [تم الرفع - حلقة]: {series_title} - س {season_num} ح {episode_num}")
 
@@ -408,7 +432,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل السكربت مع فحص وتحديث البوسترات الناقصة...")
+    print("🚀 بدء تشغيل السكربت مع تصحيح روابط about:blank تلقائياً...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -418,7 +442,6 @@ def scrape_akwam_site():
         
         page = context.new_page()
         
-        # تنفيذ فحص وتحديث البوسترات للبيانات الموجودة مسبقاً أولاً
         fix_missing_posters_in_db(page)
         
         target_categories = [
@@ -497,7 +520,7 @@ def scrape_akwam_site():
                     break
 
         browser.close()
-        print("\n🎉 تمت العملية بنجاح وتحديث جميع البوسترات!")
+        print("\n🎉 تمت العملية بنجاح!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
