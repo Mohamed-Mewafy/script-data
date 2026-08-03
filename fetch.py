@@ -1,9 +1,9 @@
 import os
 import re
-from playwright.sync_api import sync_playwright
+import asyncio
+from playwright.async_api import async_playwright
 from supabase import create_client, Client
 
-# سحب المفاتيح بأمان من بيئة النظام (GitHub Secrets)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
@@ -35,15 +35,16 @@ def clean_text(text):
     text = re.sub(r'[\"\'\[\]\{\}]', '', text)
     return " ".join(text.split()).strip()
 
-def is_link_actually_working(page, url):
-    """فحص رابط السيفر باستخدام المتصفح للتأكد من عدم وجود رسالة Not Found"""
+async def is_link_actually_working(page, url):
+    """فحص سريع لرابط السيرفر للتأكد من عدم وجود رسالة Not Found"""
     if not url:
         return False
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=10000)
-        page.wait_for_timeout(1000)
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=7000)
+        if response and response.status >= 400:
+            return False
         
-        has_error_box = page.evaluate("""() => {
+        has_error_box = await page.evaluate("""() => {
             const text = document.body ? document.body.innerText : '';
             return text.includes('Not Found') || text.includes('not found') || text.includes('no_video');
         }""")
@@ -148,11 +149,11 @@ def save_to_supabase(item_data, category_type, current_cat_url):
             
             existing = supabase.table(table_name).select("id").eq("title", title).execute()
             if existing.data and len(existing.data) > 0:
-                print(f"⏭️ [تم التخطي]: {title}")
+                print(f"⏭️ [موجود مسبقاً]: {title}")
                 return
 
             supabase.table(table_name).insert(payload).execute()
-            print(f"✅ [تم الرفع مع عدة سيرفرات]: {title}")
+            print(f"✅ [تم الرفع]: {title}")
 
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
@@ -195,14 +196,14 @@ def save_to_supabase(item_data, category_type, current_cat_url):
 
             existing_ep = supabase.table(episode_table).select("id").eq("watch_url", watch_url).execute()
             if existing_ep.data and len(existing_ep.data) > 0:
-                print(f"⏭️ [تم التخطي]: {title}")
+                print(f"⏭️ [موجود مسبقاً]: {title}")
                 return
 
             supabase.table(episode_table).insert(episode_payload).execute()
-            print(f"✅ [تم الرفع مع عدة سيرفرات]: {series_title} - حلقة {episode_num}")
+            print(f"✅ [تم الرفع]: {series_title} - حلقة {episode_num}")
 
     except Exception as e:
-        print(f"⏭️ [تم التخطي]: {title}")
+        print(f"⚠️ [خطأ في حفظ البيانات]: {title}")
         
 def clean_title(raw_title):
     title = raw_title.replace("مشاهدة", "").replace("فيلم", "").replace("مسلسل", "")
@@ -231,21 +232,29 @@ def extract_identifier(url):
             
     return None
 
-def scrape_akwam_item_details(page, item_page_url):
+async def scrape_akwam_item_details(browser, item_page_url):
+    context = await browser.new_context(
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
+    page = await context.new_page()
+
     try:
-        page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
+        await page.goto(item_page_url, wait_until="domcontentloaded", timeout=12000)
     except:
+        await context.close()
         return None
 
     title = ""
     try:
-        page_title = page.title()
+        page_title = await page.title()
         if page_title:
             title = clean_title(page_title)
     except:
         pass
 
     if not title or title in ["ات", "جديد", "الحلقات", "دخول"] or "اكوام" in title or len(title) < 3 or "صفحة" in title:
+        await context.close()
         return None
 
     is_series = "الحلقة" in title or "الموسم" in title or "/series/" in item_page_url
@@ -261,7 +270,7 @@ def scrape_akwam_item_details(page, item_page_url):
 
     poster = "غير متوفر"
     try:
-        poster = page.evaluate("""() => {
+        poster = await page.evaluate("""() => {
             const selectors = ['.entry-image img', '.poster img', '.movie-poster img', '.details-img img', '.img-fluid', 'meta[property="og:image"]'];
             for (let sel of selectors) {
                 const el = document.querySelector(sel);
@@ -277,7 +286,7 @@ def scrape_akwam_item_details(page, item_page_url):
 
     description = "غير متوفر"
     try:
-        desc_text = page.evaluate("""() => {
+        desc_text = await page.evaluate("""() => {
             const el = document.querySelector('.widget-body .text-white, .story, div[class*="story"], article p');
             return el ? el.innerText.trim() : "غير متوفر";
         }""")
@@ -288,7 +297,7 @@ def scrape_akwam_item_details(page, item_page_url):
 
     rating = "غير متوفر"
     try:
-        rating_text = page.evaluate("""() => {
+        rating_text = await page.evaluate("""() => {
             const el = document.querySelector('span.mx-2, .rating span, span:has(.icon-star)');
             return el ? el.innerText.trim() : "غير متوفر";
         }""")
@@ -299,7 +308,7 @@ def scrape_akwam_item_details(page, item_page_url):
 
     genres = []
     try:
-        raw_genres = page.evaluate("""() => {
+        raw_genres = await page.evaluate("""() => {
             const tags = document.querySelectorAll('.genres a, .cats a, a[href*="category"], .badge');
             return Array.from(tags).map(t => t.innerText.trim()).filter(Boolean);
         }""")
@@ -314,8 +323,7 @@ def scrape_akwam_item_details(page, item_page_url):
     extracted_streaming_links = []
 
     try:
-        page.goto(watch_page_url, wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_timeout(1500)
+        await page.goto(watch_page_url, wait_until="domcontentloaded", timeout=12000)
         
         frames = page.frames
         for frame in frames:
@@ -327,7 +335,7 @@ def scrape_akwam_item_details(page, item_page_url):
                     item_identifiers.append(identifier)
 
         if not item_identifiers or not extracted_streaming_links:
-            iframes_data = page.evaluate("""() => {
+            iframes_data = await page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('iframe, embed, object')).map(el => el.src || el.getAttribute('data-src')).filter(Boolean);
             }""")
             for link in iframes_data:
@@ -339,32 +347,29 @@ def scrape_akwam_item_details(page, item_page_url):
     except:
         pass
 
-    # جمع كافة الروابط والسيرفرات الشغالة حقاً وفحصها
     working_streaming_links = []
 
-    # 1. فحص الروابط المستخرجة مباشرة من الإطارات
     for link in extracted_streaming_links:
         for domain in STREAMING_DOMAINS:
             if domain in link:
-                if is_link_actually_working(page, link):
+                if await is_link_actually_working(page, link):
                     if link not in working_streaming_links:
                         working_streaming_links.append(link)
 
-    # 2. توليد الروابط عبر الـ Identifiers المتاحة وفحصها لضمان جمع أكبر عدد من السيرفرات البديلة
     if item_identifiers:
         for identifier in item_identifiers:
             for domain in STREAMING_DOMAINS:
                 candidate_url = f"{domain}{identifier}"
-                if is_link_actually_working(page, candidate_url):
+                if await is_link_actually_working(page, candidate_url):
                     if candidate_url not in working_streaming_links:
                         working_streaming_links.append(candidate_url)
+
+    await context.close()
 
     if not working_streaming_links:
         return None
 
-    # تعيين أول سيرفر شغال كـ watch_url رئيسي والباقي كروابط بديلة
     final_watch_url = working_streaming_links[0]
-    alternative_links = working_streaming_links[1:] # الباقي سيرفرات احتياطية
 
     direct_links_json = {
         "streaming_links": list(set(working_streaming_links)),
@@ -384,17 +389,15 @@ def scrape_akwam_item_details(page, item_page_url):
         "direct_links": direct_links_json
     }, category_type
 
-def scrape_akwam_site():
-    print("🚀 بدء تشغيل السحب مع جمع وفحص كافة السيرفرات البديلة...")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
+async def main():
+    print("🚀 بدء تشغيل السحب السريع بنظام Non-Blocking...")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
         
-        page = context.new_page()
-        
+        # صفحة مؤقتة لجلب الروابط وتصفح الأقسام
+        temp_context = await browser.new_context()
+        temp_page = await temp_context.new_page()
+
         target_categories = [
             "https://akwams.org/movies",
             "https://akwams.org/series",
@@ -418,17 +421,16 @@ def scrape_akwam_site():
             
             while current_page_url and page_number <= max_pages:
                 try:
-                    page.goto(current_page_url, wait_until="domcontentloaded", timeout=25000)
-                    page.wait_for_timeout(1000)
+                    await temp_page.goto(current_page_url, wait_until="domcontentloaded", timeout=20000)
                     
                     if page_number == 1 or "/page/" not in cat_url:
-                        max_pages = page.evaluate("""() => {
+                        max_pages = await temp_page.evaluate("""() => {
                             let pageLinks = Array.from(document.querySelectorAll('.pagination a, .pages a, a.page-link'));
                             let numbers = pageLinks.map(el => parseInt(el.innerText.trim())).filter(n => !isNaN(n));
                             return numbers.length > 0 ? Math.max(...numbers) : 999;
                         }""")
 
-                    item_cards = page.evaluate("""() => {
+                    item_cards = await temp_page.evaluate("""() => {
                         return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
                             if (!h || !h.includes('akwams.org')) return false;
                             if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/user/')) return false;
@@ -438,12 +440,15 @@ def scrape_akwam_site():
                     }""")
                     
                     item_links = list(set(item_cards))
+                    valid_links = [l for l in item_links if is_valid_link(l)]
                     
-                    for link in item_links:
-                        if not is_valid_link(link):
-                            continue
-                        
-                        result = scrape_akwam_item_details(page, link)
+                    print(f"📄 صفحة {page_number}: تم العثور على {len(valid_links)} رابط، جارٍ الفحص والسحب...")
+
+                    # فحص ومعالجة الروابط دفعة واحدة (Batch Processing) لتسريع الإنجاز
+                    tasks = [scrape_akwam_item_details(browser, link) for link in valid_links]
+                    results = await asyncio.gather(*tasks)
+
+                    for result in results:
                         if result:
                             item_data, cat_type = result
                             if item_data and item_data.get("title"):
@@ -462,8 +467,9 @@ def scrape_akwam_site():
                 except Exception as e:
                     break
 
-        browser.close()
-        print("\n🎉 تمت العملية بنجاح!")
+        await temp_context.close()
+        await browser.close()
+        print("\n🎉 تمت العملية بسرعة فائقة!")
 
 if __name__ == "__main__":
-    scrape_akwam_site()
+    asyncio.run(main())
