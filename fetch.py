@@ -3,7 +3,6 @@ import re
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
 
-# سحب المفاتيح بأمان من بيئة النظام (GitHub Secrets)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
@@ -17,16 +16,6 @@ BLOCKED_DOMAINS = [
     "kettledrooping", "googlesyndication", "adsterra", 
     "propellerads", "traffic", "click", "registration",
     "t.me", "actor", "page", "ad-policy", "dmca", "traincdn"
-]
-
-STREAMING_DOMAINS = [
-    "https://hgplaycdn.com/e/",
-    "https://playnixes.com/e/",
-    "https://cybervynx.com/e/",
-    "https://playmogo.com/e/",
-    "https://doodstream.com/e/",
-    "https://streamwish.fun/e/",
-    "https://miixdrop.com/e/"
 ]
 
 def clean_text(text):
@@ -97,8 +86,8 @@ def save_to_supabase(item_data, category_type, current_cat_url):
     title = item_data.get("title", "")
     watch_url = item_data.get("watch_url", "")
 
-    if not watch_url or "/watch" in watch_url or not any(domain in watch_url for domain in STREAMING_DOMAINS):
-        print(f"⏭️ [تم التخطي - رابط غير صالح]: {title}")
+    if not watch_url:
+        print(f"⏭️ [تخطي لعدم وجود رابط]: {title}")
         return
     
     unwanted_words = ["دخول", "تسجيل", "ات", "جديد", "الحلقات", "صفحة"]
@@ -198,18 +187,6 @@ def is_valid_link(link):
             return False
     return True
 
-def extract_identifier(url):
-    if not url or "registration" in url or "?" in url or "ad" in url:
-        return None
-        
-    match = re.search(r'/e/([a-zA-Z0-9_-]+)', url)
-    if match:
-        identifier = match.group(1)
-        if "registration" not in identifier and len(identifier) < 30:
-            return identifier
-            
-    return None
-
 def scrape_akwam_item_details(page, item_page_url):
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=10000)
@@ -289,7 +266,6 @@ def scrape_akwam_item_details(page, item_page_url):
     clean_base_url = item_page_url.rstrip('/')
     watch_page_url = clean_base_url if clean_base_url.endswith('/watch') else f"{clean_base_url}/watch/"
 
-    item_identifiers = []
     extracted_streaming_links = []
 
     try:
@@ -300,55 +276,22 @@ def scrape_akwam_item_details(page, item_page_url):
             f_url = frame.url
             if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
                 extracted_streaming_links.append(f_url)
-                identifier = extract_identifier(f_url)
-                if identifier and identifier not in item_identifiers:
-                    item_identifiers.append(identifier)
 
-        if not item_identifiers or not extracted_streaming_links:
+        if not extracted_streaming_links:
             iframes_data = page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('iframe, embed, object')).map(el => el.src || el.getAttribute('data-src')).filter(Boolean);
             }""")
             for link in iframes_data:
                 if is_valid_link(link):
                     extracted_streaming_links.append(link)
-                    identifier = extract_identifier(link)
-                    if identifier and identifier not in item_identifiers:
-                        item_identifiers.append(identifier)
     except:
         pass
 
-    final_watch_url = None
-    direct_streaming_links = []
-
-    # اختيار أول رابط سيفر مطابق بشكل مباشر بدون فحص بطيء (لزيادة السرعة)
-    for link in extracted_streaming_links:
-        for domain in STREAMING_DOMAINS:
-            if domain in link:
-                final_watch_url = link
-                break
-        if final_watch_url:
-            break
-
-    if not final_watch_url and item_identifiers:
-        for identifier in item_identifiers:
-            for domain in STREAMING_DOMAINS:
-                final_watch_url = f"{domain}{identifier}"
-                break
-            if final_watch_url:
-                break
-
-    if not final_watch_url:
-        return None
-
-    if item_identifiers:
-        for identifier in item_identifiers:
-            for domain in STREAMING_DOMAINS:
-                alt_link = f"{domain}{identifier}"
-                if alt_link != final_watch_url and alt_link not in direct_streaming_links:
-                    direct_streaming_links.append(alt_link)
+    # إذا لم يجد روابط في صفحة الـ watch، سنستخدم رابط صفحة الفيلم نفسها كبديل لكي لا يضيع الفيلم أبدًا
+    final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else item_page_url
 
     direct_links_json = {
-        "streaming_links": list(set(direct_streaming_links)),
+        "streaming_links": list(set(extracted_streaming_links)),
         "download_links": []
     }
 
@@ -360,13 +303,13 @@ def scrape_akwam_item_details(page, item_page_url):
         "description": description,
         "rating": rating,
         "genres": list(set(genres)),
-        "external_id": item_identifiers[0] if item_identifiers else None,
+        "external_id": None,
         "watch_url": final_watch_url,
         "direct_links": direct_links_json
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل السحب المحسّن والسريع...")
+    print("🚀 بدء تشغيل السحب الشامل (بدون أي تخطي للعناصر)...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -400,7 +343,6 @@ def scrape_akwam_site():
             max_pages = 9999
             
             while current_page_url and page_number <= max_pages:
-                # طباعة رقم الصفحة بوضوح لتتابع العملية في الـ Terminal
                 print(f"\n📄 جارِ سحب الصفحة رقم: [{page_number}] | الرابط: {current_page_url}")
                 
                 try:
@@ -453,7 +395,7 @@ def scrape_akwam_site():
                     break
 
         browser.close()
-        print("\n🎉 تمت العملية بنجاح!")
+        print("\n🎉 تمت العملية بنجاح ولن يتم تفويت أي عنصر!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
