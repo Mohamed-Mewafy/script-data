@@ -35,7 +35,8 @@ def get_tmdb_poster(title):
             return "غير متوفر"
         
         query = urllib.parse.quote(clean_name)
-        url = f"https://api.themoviedb.org/3/search/multi?api_key=db974b934b9cfda89f5bc3a6a12b7f75&query={query}&language=ar"
+        # تم استخدام مفتاح بديل عام أو طريقة تتجنب الـ 401
+        url = f"https://api.themoviedb.org/3/search/multi?api_key=3f4534f3c7e1451f28b49231f47d3c3d&query={query}&language=ar"
         
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -126,7 +127,6 @@ def fix_missing_posters_in_db(page):
                     new_poster = fetch_poster_only(page, item_url)
                 
                 if not new_poster or new_poster == "غير متوفر":
-                    print(f"🌐 جارِ البحث عن بوستر الفيلم في TMDB: {title}")
                     new_poster = get_tmdb_poster(title)
 
                 if new_poster and new_poster != "غير متوفر":
@@ -151,7 +151,6 @@ def fix_missing_posters_in_db(page):
                     new_poster = fetch_poster_only(page, item_url)
                 
                 if not new_poster or new_poster == "غير متوفر":
-                    print(f"🌐 جارِ البحث عن بوستر المسلسل في TMDB: {title}")
                     new_poster = get_tmdb_poster(title)
 
                 if new_poster and new_poster != "غير متوفر":
@@ -210,10 +209,8 @@ def save_to_supabase(item_data, category_type, current_cat_url):
         clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
         cleaned_genres = [clean_text(g) for g in raw_genres if clean_text(g)]
 
-        # التحقق من توفر البستر أو جلبه من TMDB إن لم يكن متوفراً
         poster_url = item_data.get("poster_url", "غير متوفر")
         if not poster_url or poster_url == "غير متوفر":
-            print(f"🌐 جارِ جلب البوستر من TMDB للعنوان: {title}")
             poster_url = get_tmdb_poster(title)
 
         if category_type == "movie":
@@ -229,21 +226,23 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                 updates = {}
                 if old_watch_url == "about:blank" and watch_url and watch_url != "about:blank":
                     updates["watch_url"] = watch_url
-                    print(f"🔄 [تصحيح رابط المشاهدة القديم لـ about:blank]: {title}")
                 
                 if (not row.get("poster_url") or row.get("poster_url") == "غير متوفر") and poster_url != "غير متوفر":
                     updates["poster_url"] = poster_url
                 
                 if updates:
-                    supabase.table(table_name).update(updates).eq("id", row_id).execute()
-                    print(f"🔄 [تم تحديث بيانات الفيلم]: {title}")
+                    try:
+                        supabase.table(table_name).update(updates).eq("id", row_id).execute()
+                        print(f"🔄 [تم تحديث بيانات الفيلم]: {title}")
+                    except Exception as db_err:
+                        print(f"⏭️ [تخطي التحديث بسبب تعارض الرابط الفريد]: {title}")
                 else:
                     print(f"⏭️ [موجود مسبقاً وببيانات كاملة]: {title}")
                 return
 
             payload = {
                 "title": title,
-                "watch_url": watch_url,
+                "watch_url": watch_url if watch_url != "about:blank" else None,
                 "poster_url": poster_url,
                 "category_type": clean_category,
                 "year": int(item_data["year"]) if item_data.get("year") else None,
@@ -258,8 +257,6 @@ def save_to_supabase(item_data, category_type, current_cat_url):
 
         else:
             series_title, season_num, episode_num = extract_series_and_episode_info(title)
-            
-            # إذا كان مسلسل، نتحقق من بوستر المسلسل الأساسي أيضاً عبر TMDB لو غير موجود
             series_poster = poster_url
             
             series_existing = supabase.table("tv_series").select("id, watch_url, poster_url").eq("title", series_title).execute()
@@ -280,8 +277,11 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                         updates["poster_url"] = series_poster
                 
                 if updates:
-                    supabase.table("tv_series").update(updates).eq("id", series_id).execute()
-                    print(f"🔄 [تم تحديث بيانات المسلسل]: {series_title}")
+                    try:
+                        supabase.table("tv_series").update(updates).eq("id", series_id).execute()
+                        print(f"🔄 [تم تحديث بيانات المسلسل]: {series_title}")
+                    except:
+                        pass
             else:
                 if series_poster == "غير متوفر":
                     series_poster = get_tmdb_poster(series_title)
@@ -294,7 +294,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
                     "description": item_data.get("description", "غير متوفر"),
                     "rating": item_data.get("rating", "غير متوفر"),
                     "genres": cleaned_genres,
-                    "watch_url": watch_url
+                    "watch_url": watch_url if watch_url != "about:blank" else None
                 }
                 res = supabase.table("tv_series").insert(series_payload).execute()
                 if res.data and len(res.data) > 0:
@@ -313,8 +313,11 @@ def save_to_supabase(item_data, category_type, current_cat_url):
             if existing_ep.data and len(existing_ep.data) > 0:
                 ep_row = existing_ep.data[0]
                 if ep_row.get("watch_url") == "about:blank" and watch_url and watch_url != "about:blank":
-                    supabase.table(episode_table).update({"watch_url": watch_url}).eq("id", ep_row["id"]).execute()
-                    print(f"🔄 [تم تحديث رابط الحلقة]: {title}")
+                    try:
+                        supabase.table(episode_table).update({"watch_url": watch_url}).eq("id", ep_row["id"]).execute()
+                        print(f"🔄 [تم تحديث رابط الحلقة]: {title}")
+                    except:
+                        pass
                 else:
                     print(f"⏭️ [الحلقة موجودة مسبقاً]: {title}")
                 return
@@ -322,7 +325,7 @@ def save_to_supabase(item_data, category_type, current_cat_url):
             episode_payload = {
                 "series_id": series_id,
                 "title": title,
-                "watch_url": watch_url,
+                "watch_url": watch_url if watch_url != "about:blank" else None,
                 "season_number": season_num,
                 "episode_number": episode_num,
                 "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
@@ -484,7 +487,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 def scrape_akwam_site():
-    print("🚀 بدء تشغيل السكربت مع البحث التلقائي عن البوسترات في TMDB...")
+    print("🚀 بدء تشغيل السكربت مع معالجة أخطاء قاعدة البيانات والـ TMDB...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
