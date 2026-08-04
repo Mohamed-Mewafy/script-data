@@ -502,7 +502,7 @@ def scrape_akwam_site():
         target_categories = [
             #"https://akwams.org/movies",
             #"https://akwams.org/series",
-            "https://akwams.org/category/movies/افلام-اجنبي/page/250",
+            #"https://akwams.org/category/movies/افلام-اجنبي/page/250",
             "https://akwams.org/category/movies/افلام-عربي",
             "https://akwams.org/category/movies/افلام-هندية",
             "https://akwams.org/category/movies/افلام-اسيوية",
