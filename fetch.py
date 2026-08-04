@@ -503,12 +503,12 @@ def scrape_akwam_site():
             #"https://akwams.org/movies",
             #"https://akwams.org/series",
             #"https://akwams.org/category/movies/افلام-اجنبي/page/250",
-            "https://akwams.org/category/movies/افلام-عربي",
-            "https://akwams.org/category/movies/افلام-هندية",
-            "https://akwams.org/category/movies/افلام-اسيوية",
-            "https://akwams.org/category/movies/افلام-انمي",
-            "https://akwams.org/category/series/مسلسلات-اجنبي",
-            "https://akwams.org/category/series/مسلسلات-تركية",
+           # "https://akwams.org/category/movies/افلام-عربي",
+            #"https://akwams.org/category/movies/افلام-هندية",
+            #"https://akwams.org/category/movies/افلام-اسيوية",
+            #"https://akwams.org/category/movies/افلام-انمي",
+            #"https://akwams.org/category/series/مسلسلات-اجنبي",
+            "https://akwams.org/category/series/مسلسلات-تركية/page/13",
             "https://akwams.org/category/series/مسلسلات-انمي"
         ]
 
