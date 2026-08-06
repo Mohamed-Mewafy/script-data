@@ -22,7 +22,8 @@ BLOCKED_DOMAINS = [
     "1xlite", "1xbet", "suphelper", "spendsdetachment", 
     "kettledrooping", "googlesyndication", "adsterra", 
     "propellerads", "traffic", "click", "registration",
-    "t.me", "actor", "page", "ad-policy", "dmca", "traincdn"
+    "t.me", "actor", "page", "ad-policy", "dmca", "traincdn",
+    "akwams.org", "akwam"
 ]
 
 def clean_text(text):
@@ -41,13 +42,17 @@ def is_valid_link(link):
     if not link:
         return False
     link_lower = link.lower()
+    
+    if "akwams.org" in link_lower or "akwam" in link_lower:
+        return False
+
     for blocked in BLOCKED_DOMAINS:
         if blocked in link_lower:
             return False
     return True
 
 # -------------------------------------------------------------
-# 💰 دالة اختصار الروابط عبر ShrinkMe.io (بدون طباعة تكرارية)
+# 💰 دالة اختصار الروابط عبر ShrinkMe.io
 # -------------------------------------------------------------
 def shorten_link_via_shrinkme(original_url):
     if not original_url or not is_valid_link(original_url):
@@ -152,12 +157,17 @@ def extract_series_and_episode_info(full_title):
     return series_title if series_title else full_title, season_num, ep_num
 
 # -------------------------------------------------------------
-# 📥 دالة سحب روابط التحميل المباشرة واختصارها آلياً
+# 📥 دالة سحب روابط التحميل المباشرة (مع التحقق من رابط الحلقة)
 # -------------------------------------------------------------
 def fetch_download_links_only(page, item_page_url, max_retries=2):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
     
+    # منع محاولة إضافة /download إذا كنا نقف على الصفحة الرئيسية للمسلسل/الأنمي (التي تحتوي على /series/)
+    if "/series/" in clean_base_url and not any(x in clean_base_url for x in ["episode", "الحلقة", "movie"]):
+        # إذا لم تكن صفحة حلقة فرعية، نتخطي محاولة جلب التحميل بالطريقة المباشرة لتجنب إعادة التوجيه
+        return []
+
     if clean_base_url.endswith('/watch'):
         download_page_url = clean_base_url.replace('/watch', '/download')
     elif clean_base_url.endswith('/download'):
@@ -169,6 +179,10 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
         try:
             page.goto(download_page_url, wait_until="domcontentloaded", timeout=20000)
             
+            # التحقق مما إذا تم إعادة توجيهنا للصفحة الرئيسية أو صفحة خطأ
+            if page.url.rstrip('/') == "https://akwams.org" or "/series/" in page.url and "episode" not in page.url:
+                break
+
             try:
                 page.wait_for_selector('a[href*="download"], a[href*="/link/"], .btn-download, a.download-link', timeout=5000)
             except Exception:
@@ -195,12 +209,6 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
                 if is_valid_link(link) and link != download_page_url and link not in raw_download_links:
                     raw_download_links.append(link)
 
-            for frame in page.frames:
-                f_url = frame.url
-                if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
-                    if f_url not in raw_download_links:
-                        raw_download_links.append(f_url)
-
             if raw_download_links:
                 break
                 
@@ -209,11 +217,11 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
                 print(f"    ⚠️ متعذر زيارة صفحة التحميل ({download_page_url}): {e}")
             time.sleep(1)
 
-    # اختصار الروابط مع طباعة رسالة واحدة ملخصة
     shortened_download_links = []
     for raw_link in raw_download_links:
         short_link = shorten_link_via_shrinkme(raw_link)
-        shortened_download_links.append(short_link)
+        if is_valid_link(short_link):
+            shortened_download_links.append(short_link)
 
     if shortened_download_links:
         print(f"    💵 تم اختصار ({len(shortened_download_links)}) رابط بنجاح!")
@@ -315,7 +323,7 @@ def scrape_akwam_item_details(page, item_page_url):
         frames = page.frames
         for frame in frames:
             f_url = frame.url
-            if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
+            if f_url and is_valid_link(f_url):
                 extracted_streaming_links.append(f_url)
 
         if not extracted_streaming_links:
@@ -328,8 +336,12 @@ def scrape_akwam_item_details(page, item_page_url):
     except Exception:
         pass
 
-    final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else item_page_url
-    extracted_download_links = fetch_download_links_only(page, item_page_url)
+    final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
+    
+    # استدعاء دالة الروابط مع التأكد من أن الرابط يخص حلقة فعلية
+    extracted_download_links = []
+    if "الحلقة" in title or "episode" in item_page_url.lower():
+        extracted_download_links = fetch_download_links_only(page, item_page_url)
 
     direct_links_json = {
         "streaming_links": list(set(extracted_streaming_links)),
@@ -360,7 +372,6 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
     if any(w == title for w in unwanted_words):
         return
 
-    # 1. حالة الفيلم
     if category_type == "movie":
         existing_movie = supabase.table("movies_cima").select("id, direct_links").eq("title", title).execute()
         
@@ -409,7 +420,6 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
         supabase.table("movies_cima").upsert(formatted_movie, on_conflict="title").execute()
         print(f"✅ [فيلم جديد تم الحفظ]: {title}")
 
-    # 2. حالة المسلسل / الحلقة
     else:
         series_title, season_num, episode_num = extract_series_and_episode_info(title)
         raw_genres = item_data.get("genres", [])
@@ -437,7 +447,6 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
             res = supabase.table("tv_series").upsert(series_data, on_conflict="title").execute()
             series_id = res.data[0]["id"]
 
-        # التحقق من الحلقة
         existing_episode = supabase.table("episodes_cima").select("id, direct_links").eq("series_id", series_id).eq("season_number", season_num).eq("episode_number", episode_num).execute()
 
         if existing_episode.data:
@@ -464,7 +473,6 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
                     print(f"⏭️ الحلقة [{title}] تحتوي بالفعل على روابط تحميل، تخطي...")
             return
 
-        # إضافة حلقة جديدة باستخدام insert بدون حاجة لـ Unique Constraint
         formatted_episode = {
             "series_id": series_id,
             "title": title,
@@ -543,6 +551,11 @@ def scrape_akwam_site():
                         if not is_valid_link(link):
                             continue
                         
+                        # تصفية الروابط بحيث يتم التركيز فقط على صفحات الحلقات والأفلام (تخطي الصفحات الرئيسية للمسلسلات التي لا تحتوي على حلقات مباشرة)
+                        if "/series/" in link and "episode" not in link.lower() and "الحلقة" not in link:
+                            # هذه صفحة رئيسية للمسلسل/الأنمي، فلن نتخطاها كلياً لو كنا نريد تخزين تفاصيل المسلسل نفسه، ولكن لن نحاول جلب روابط تحميل منها
+                            pass
+
                         print(f"    ⏳ فحص العنصر ({index}/{len(item_links)})...")
                         result = scrape_akwam_item_details(page, link)
                         if result:
