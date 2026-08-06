@@ -11,7 +11,7 @@ from supabase import create_client, Client
 # ضبط متغيرات البيئة الخاصة بـ Supabase و ShrinkMe
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN",)
+SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل صحيح.")
@@ -23,7 +23,7 @@ BLOCKED_DOMAINS = [
     "kettledrooping", "googlesyndication", "adsterra", 
     "propellerads", "traffic", "click", "registration",
     "t.me", "actor", "page", "ad-policy", "dmca", "traincdn",
-    "akwams.org", "akwam"
+    "akwams.org", "akwam"  # منع أي روابط تخص أكوام تماماً
 ]
 
 def clean_text(text):
@@ -157,17 +157,12 @@ def extract_series_and_episode_info(full_title):
     return series_title if series_title else full_title, season_num, ep_num
 
 # -------------------------------------------------------------
-# 📥 دالة سحب روابط التحميل المباشرة (مع التحقق من رابط الحلقة)
+# 📥 دالة سحب روابط التحميل المباشرة
 # -------------------------------------------------------------
 def fetch_download_links_only(page, item_page_url, max_retries=2):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
     
-    # منع محاولة إضافة /download إذا كنا نقف على الصفحة الرئيسية للمسلسل/الأنمي (التي تحتوي على /series/)
-    if "/series/" in clean_base_url and not any(x in clean_base_url for x in ["episode", "الحلقة", "movie"]):
-        # إذا لم تكن صفحة حلقة فرعية، نتخطي محاولة جلب التحميل بالطريقة المباشرة لتجنب إعادة التوجيه
-        return []
-
     if clean_base_url.endswith('/watch'):
         download_page_url = clean_base_url.replace('/watch', '/download')
     elif clean_base_url.endswith('/download'):
@@ -179,10 +174,6 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
         try:
             page.goto(download_page_url, wait_until="domcontentloaded", timeout=20000)
             
-            # التحقق مما إذا تم إعادة توجيهنا للصفحة الرئيسية أو صفحة خطأ
-            if page.url.rstrip('/') == "https://akwams.org" or "/series/" in page.url and "episode" not in page.url:
-                break
-
             try:
                 page.wait_for_selector('a[href*="download"], a[href*="/link/"], .btn-download, a.download-link', timeout=5000)
             except Exception:
@@ -208,6 +199,12 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
             for link in links:
                 if is_valid_link(link) and link != download_page_url and link not in raw_download_links:
                     raw_download_links.append(link)
+
+            for frame in page.frames:
+                f_url = frame.url
+                if f_url and is_valid_link(f_url):
+                    if f_url not in raw_download_links:
+                        raw_download_links.append(f_url)
 
             if raw_download_links:
                 break
@@ -337,11 +334,7 @@ def scrape_akwam_item_details(page, item_page_url):
         pass
 
     final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
-    
-    # استدعاء دالة الروابط مع التأكد من أن الرابط يخص حلقة فعلية
-    extracted_download_links = []
-    if "الحلقة" in title or "episode" in item_page_url.lower():
-        extracted_download_links = fetch_download_links_only(page, item_page_url)
+    extracted_download_links = fetch_download_links_only(page, item_page_url)
 
     direct_links_json = {
         "streaming_links": list(set(extracted_streaming_links)),
@@ -488,7 +481,7 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
 # 🚀 السكربت الرئيسي
 # -------------------------------------------------------------
 def scrape_akwam_site():
-    print("🚀 بدء السكربت المحدث لجلب وتحديث الروابط واختصارها آلياً...")
+    print("🚀 بدء السكربت الأصلي والشغال...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -551,11 +544,6 @@ def scrape_akwam_site():
                         if not is_valid_link(link):
                             continue
                         
-                        # تصفية الروابط بحيث يتم التركيز فقط على صفحات الحلقات والأفلام (تخطي الصفحات الرئيسية للمسلسلات التي لا تحتوي على حلقات مباشرة)
-                        if "/series/" in link and "episode" not in link.lower() and "الحلقة" not in link:
-                            # هذه صفحة رئيسية للمسلسل/الأنمي، فلن نتخطاها كلياً لو كنا نريد تخزين تفاصيل المسلسل نفسه، ولكن لن نحاول جلب روابط تحميل منها
-                            pass
-
                         print(f"    ⏳ فحص العنصر ({index}/{len(item_links)})...")
                         result = scrape_akwam_item_details(page, link)
                         if result:
