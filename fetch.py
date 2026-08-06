@@ -126,7 +126,7 @@ def extract_series_and_episode_info(full_title):
     return series_title if series_title else full_title, season_num, ep_num
 
 # -------------------------------------------------------------
-# 📥 دالة احترافية لسحب روابط التحميل مع محاولات متعددة
+# 📥 دالة سحب روابط التحميل المباشرة فقط
 # -------------------------------------------------------------
 def fetch_download_links_only(page, item_page_url, max_retries=2):
     download_links = []
@@ -143,13 +143,11 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
         try:
             page.goto(download_page_url, wait_until="domcontentloaded", timeout=20000)
             
-            # الانتظار القليل لضمان بناء العناصر في الصفحة
             try:
                 page.wait_for_selector('a[href*="download"], a[href*="/link/"], .btn-download, a.download-link', timeout=5000)
             except Exception:
                 pass
 
-            # استخراج جميع أنواع روابط وروابط السيرفرات والأزرار
             links = page.evaluate("""() => {
                 const downloadElements = Array.from(document.querySelectorAll(`
                     a[href*="download"], 
@@ -171,7 +169,6 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
                 if is_valid_link(link) and link != download_page_url and link not in download_links:
                     download_links.append(link)
 
-            # فحص الـ Frames
             for frame in page.frames:
                 f_url = frame.url
                 if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
@@ -179,7 +176,7 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
                         download_links.append(f_url)
 
             if download_links:
-                break # تم العثور على روابط بنجاح
+                break
                 
         except Exception as e:
             if attempt == max_retries - 1:
@@ -189,7 +186,7 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
     return download_links
 
 # -------------------------------------------------------------
-# 🎬 دالة سحب البيانات التفصيلية كاملة
+# 🎬 دالة سحب البيانات التفصيلية كاملة (للعناصر الجديدة فقط)
 # -------------------------------------------------------------
 def scrape_akwam_item_details(page, item_page_url):
     try:
@@ -317,7 +314,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 # -------------------------------------------------------------
-# 💾 دالة حفظ / تحديث البيانات مع التأكد التام من روابط التحميل
+# 💾 دالة الحفظ الذكي (تحديث download_links فقط بدون المساس بالمشاهدة)
 # -------------------------------------------------------------
 def save_or_update_download_links(page, item_data, category_type, current_cat_url, item_page_url):
     title = item_data.get("title", "")
@@ -336,29 +333,30 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
             row = existing_movie.data[0]
             movie_id = row.get("id")
             direct_links = row.get("direct_links") or {}
-            download_links = direct_links.get("download_links", [])
             
-            # إذا كانت روابط التحميل غير موجودة أو فارغة
-            if not download_links:
-                print(f"🔄 الفيلم [{title}] موجود ببيانات ناقصة. جاري جلب روابط التحميل...")
-                new_download_links = fetch_download_links_only(page, item_page_url)
+            # التأكد إن direct_links كائن JSON
+            if isinstance(direct_links, dict):
+                download_links = direct_links.get("download_links", [])
                 
-                if new_download_links:
-                    updated_direct_links = {
-                        "streaming_links": direct_links.get("streaming_links", []),
-                        "download_links": list(set(new_download_links))
-                    }
-                    supabase.table("movies_cima").update({
-                        "direct_links": updated_direct_links
-                    }).eq("id", movie_id).execute()
-                    print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الفيلم: {title}")
+                # إذا كانت مصفوفة روابط التحميل فارغة فقط
+                if not download_links:
+                    print(f"🔄 الفيلم [{title}] موجود وروابط التحميل فارغة. جاري الجلب...")
+                    new_download_links = fetch_download_links_only(page, item_page_url)
+                    
+                    if new_download_links:
+                        # تحديث مفتاح download_links فقط والحفاظ على بقية الكائن كـ streaming_links
+                        direct_links["download_links"] = list(set(new_download_links))
+                        
+                        supabase.table("movies_cima").update({
+                            "direct_links": direct_links
+                        }).eq("id", movie_id).execute()
+                        
+                        print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الفيلم: {title}")
                 else:
-                    print(f"⚠️ فشل استخراج روابط تحميل لـ [{title}] بعد المحاولات. سيتم إعادتها لاحقاً.")
-            else:
-                print(f"⏭️ الفيلم [{title}] مكتمل ويحتوي على روابط التحميل، تخطي...")
+                    print(f"⏭️ الفيلم [{title}] يحتوي بالفعل على روابط تحميل، تخطي...")
             return
 
-        # إذا لم يكن الفيلم موجوداً من الأساس => سحب البيانات الكاملة وحفظها
+        # إضافة فيلم جديد إذا لم يكن موجوداً
         raw_genres = item_data.get("genres", [])
         clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
         cleaned_genres = [clean_text(g) for g in raw_genres if clean_text(g)]
@@ -408,35 +406,35 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
             res = supabase.table("tv_series").upsert(series_data, on_conflict="title").execute()
             series_id = res.data[0]["id"]
 
-        # التحقق من الحلقة في جدول الحلقات
+        # التحقق من الحلقة
         existing_episode = supabase.table("episodes_cima").select("id, direct_links").eq("series_id", series_id).eq("season_number", season_num).eq("episode_number", episode_num).execute()
 
         if existing_episode.data:
             row = existing_episode.data[0]
             ep_id = row.get("id")
             direct_links = row.get("direct_links") or {}
-            download_links = direct_links.get("download_links", [])
+            
+            if isinstance(direct_links, dict):
+                download_links = direct_links.get("download_links", [])
 
-            if not download_links:
-                print(f"🔄 الحلقة [{title}] موجودة ببيانات ناقصة. جاري جلب روابط التحميل...")
-                new_download_links = fetch_download_links_only(page, item_page_url)
-                
-                if new_download_links:
-                    updated_direct_links = {
-                        "streaming_links": direct_links.get("streaming_links", []),
-                        "download_links": list(set(new_download_links))
-                    }
-                    supabase.table("episodes_cima").update({
-                        "direct_links": updated_direct_links
-                    }).eq("id", ep_id).execute()
-                    print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الحلقة: {title}")
+                if not download_links:
+                    print(f"🔄 الحلقة [{title}] موجودة وروابط التحميل فارغة. جاري الجلب...")
+                    new_download_links = fetch_download_links_only(page, item_page_url)
+                    
+                    if new_download_links:
+                        # تحديث مفتاح download_links فقط مع الحفاظ على باقي البيانات
+                        direct_links["download_links"] = list(set(new_download_links))
+                        
+                        supabase.table("episodes_cima").update({
+                            "direct_links": direct_links
+                        }).eq("id", ep_id).execute()
+                        
+                        print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الحلقة: {title}")
                 else:
-                    print(f"⚠️ فشل استخراج روابط تحميل لـ الحلقة [{title}] بعد المحاولات.")
-            else:
-                print(f"⏭️ الحلقة [{title}] مكتملة وتحتوي على روابط التحميل، تخطي...")
+                    print(f"⏭️ الحلقة [{title}] تحتوي بالفعل على روابط تحميل، تخطي...")
             return
 
-        # إذا لم تكن الحلقة موجودة من الأساس => إضافتها بالكامل
+        # إضافة حلقة جديدة لو مش موجودة
         formatted_episode = {
             "series_id": series_id,
             "title": title,
@@ -452,7 +450,7 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
 # 🚀 السكربت الرئيسي
 # -------------------------------------------------------------
 def scrape_akwam_site():
-    print("🚀 بدء السكربت المحدث للحصول على جميع روابط التحميل بدون تفويت...")
+    print("🚀 بدء السكربت المحدث للحصول على روابط التحميل وتحديثها بدقة...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
