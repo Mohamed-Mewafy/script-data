@@ -4,12 +4,14 @@ import time
 import urllib.parse
 import urllib.request
 import json
+import requests
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
 
-# ضبط متغيرات البيئة الخاصة بـ Supabase
+# ضبط متغيرات البيئة الخاصة بـ Supabase و ShrinkMe
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN", "bd18d2a137922d79b5af1f583cdc84aa325d47c2")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل صحيح.")
@@ -43,6 +45,34 @@ def is_valid_link(link):
         if blocked in link_lower:
             return False
     return True
+
+# -------------------------------------------------------------
+# 💰 دالة اختصار الروابط تلقائياً عبر API الخاص بـ ShrinkMe.io
+# -------------------------------------------------------------
+def shorten_link_via_shrinkme(original_url):
+    if not original_url or not is_valid_link(original_url):
+        return original_url
+
+    # إذا كان الرابط مختصراً بالفعل سابقاً لا تعد اختصاره
+    if "shrinkme.io" in original_url:
+        return original_url
+
+    try:
+        encoded_url = urllib.parse.quote(original_url)
+        api_url = f"https://shrinkme.io/api?api={SHRINKME_API_TOKEN}&url={encoded_url}"
+        
+        response = requests.get(api_url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("status") == "success" and data.get("shortenedUrl"):
+                shortened = data.get("shortenedUrl")
+                print(f"    💵 تم اختصار الرابط بنجاح: {shortened}")
+                return shortened
+    except Exception as e:
+        print(f"    ⚠️ خطأ في اختصار الرابط عبر ShrinkMe: {e}")
+    
+    # في حالة حدوث خطأ يتم إرجاع الرابط الأصلي للحفاظ على عمل السكربت
+    return original_url
 
 def get_tmdb_poster(title):
     try:
@@ -126,10 +156,10 @@ def extract_series_and_episode_info(full_title):
     return series_title if series_title else full_title, season_num, ep_num
 
 # -------------------------------------------------------------
-# 📥 دالة سحب روابط التحميل المباشرة فقط
+# 📥 دالة سحب روابط التحميل المباشرة واختصارها آلياً
 # -------------------------------------------------------------
 def fetch_download_links_only(page, item_page_url, max_retries=2):
-    download_links = []
+    raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
     
     if clean_base_url.endswith('/watch'):
@@ -166,16 +196,16 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
             }""")
 
             for link in links:
-                if is_valid_link(link) and link != download_page_url and link not in download_links:
-                    download_links.append(link)
+                if is_valid_link(link) and link != download_page_url and link not in raw_download_links:
+                    raw_download_links.append(link)
 
             for frame in page.frames:
                 f_url = frame.url
                 if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
-                    if f_url not in download_links:
-                        download_links.append(f_url)
+                    if f_url not in raw_download_links:
+                        raw_download_links.append(f_url)
 
-            if download_links:
+            if raw_download_links:
                 break
                 
         except Exception as e:
@@ -183,10 +213,16 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
                 print(f"    ⚠️ متعذر زيارة صفحة التحميل ({download_page_url}): {e}")
             time.sleep(1)
 
-    return download_links
+    # 🔗 اختصار كل رابط مأخوذ باستخدام API موقع ShrinkMe تلقائياً
+    shortened_download_links = []
+    for raw_link in raw_download_links:
+        short_link = shorten_link_via_shrinkme(raw_link)
+        shortened_download_links.append(short_link)
+
+    return shortened_download_links
 
 # -------------------------------------------------------------
-# 🎬 دالة سحب البيانات التفصيلية كاملة (للعناصر الجديدة فقط)
+# 🎬 دالة سحب البيانات التفصيلية كاملة
 # -------------------------------------------------------------
 def scrape_akwam_item_details(page, item_page_url):
     try:
@@ -314,7 +350,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 # -------------------------------------------------------------
-# 💾 دالة الحفظ الذكي (تحديث download_links فقط بدون المساس بالمشاهدة)
+# 💾 دالة الحفظ والتحديث في Supabase
 # -------------------------------------------------------------
 def save_or_update_download_links(page, item_data, category_type, current_cat_url, item_page_url):
     title = item_data.get("title", "")
@@ -334,29 +370,27 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
             movie_id = row.get("id")
             direct_links = row.get("direct_links") or {}
             
-            # التأكد إن direct_links كائن JSON
             if isinstance(direct_links, dict):
                 download_links = direct_links.get("download_links", [])
                 
-                # إذا كانت مصفوفة روابط التحميل فارغة فقط
+                # إذا كانت روابط التحميل فارغة فقط
                 if not download_links:
-                    print(f"🔄 الفيلم [{title}] موجود وروابط التحميل فارغة. جاري الجلب...")
+                    print(f"🔄 الفيلم [{title}] موجود وروابط التحميل فارغة. جاري الجلب والاختصار...")
                     new_download_links = fetch_download_links_only(page, item_page_url)
                     
                     if new_download_links:
-                        # تحديث مفتاح download_links فقط والحفاظ على بقية الكائن كـ streaming_links
                         direct_links["download_links"] = list(set(new_download_links))
                         
                         supabase.table("movies_cima").update({
                             "direct_links": direct_links
                         }).eq("id", movie_id).execute()
                         
-                        print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الفيلم: {title}")
+                        print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل مختصر لـ الفيلم: {title}")
                 else:
                     print(f"⏭️ الفيلم [{title}] يحتوي بالفعل على روابط تحميل، تخطي...")
             return
 
-        # إضافة فيلم جديد إذا لم يكن موجوداً
+        # إذا لم يكن الفيلم موجوداً من الأساس
         raw_genres = item_data.get("genres", [])
         clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
         cleaned_genres = [clean_text(g) for g in raw_genres if clean_text(g)]
@@ -418,18 +452,17 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
                 download_links = direct_links.get("download_links", [])
 
                 if not download_links:
-                    print(f"🔄 الحلقة [{title}] موجودة وروابط التحميل فارغة. جاري الجلب...")
+                    print(f"🔄 الحلقة [{title}] موجودة وروابط التحميل فارغة. جاري الجلب والاختصار...")
                     new_download_links = fetch_download_links_only(page, item_page_url)
                     
                     if new_download_links:
-                        # تحديث مفتاح download_links فقط مع الحفاظ على باقي البيانات
                         direct_links["download_links"] = list(set(new_download_links))
                         
                         supabase.table("episodes_cima").update({
                             "direct_links": direct_links
                         }).eq("id", ep_id).execute()
                         
-                        print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الحلقة: {title}")
+                        print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل مختصر لـ الحلقة: {title}")
                 else:
                     print(f"⏭️ الحلقة [{title}] تحتوي بالفعل على روابط تحميل، تخطي...")
             return
@@ -450,7 +483,7 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
 # 🚀 السكربت الرئيسي
 # -------------------------------------------------------------
 def scrape_akwam_site():
-    print("🚀 بدء السكربت المحدث للحصول على روابط التحميل وتحديثها بدقة...")
+    print("🚀 بدء السكربت لجلب وتحديث الروابط واختصارها آلياً عبر ShrinkMe.io...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -536,7 +569,7 @@ def scrape_akwam_site():
                     break
 
         browser.close()
-        print("\n🎉 تمت العملية بنجاح لجميع الأقسام!")
+        print("\n🎉 تمت العملية بنجاح وبدأت الأرباح في التدفق!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
