@@ -11,7 +11,7 @@ from supabase import create_client, Client
 # ضبط متغيرات البيئة الخاصة بـ Supabase و ShrinkMe
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN", "bd18d2a137922d79b5af1f583cdc84aa325d47c2")
+SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN",)
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل صحيح.")
