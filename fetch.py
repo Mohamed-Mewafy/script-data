@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import urllib.parse
 import urllib.request
 import json
@@ -125,38 +126,65 @@ def extract_series_and_episode_info(full_title):
     return series_title if series_title else full_title, season_num, ep_num
 
 # -------------------------------------------------------------
-# 📥 دالة سحب روابط التحميل فقط من صفحة التحميل
+# 📥 دالة احترافية لسحب روابط التحميل مع محاولات متعددة
 # -------------------------------------------------------------
-def fetch_download_links_only(page, item_page_url):
+def fetch_download_links_only(page, item_page_url, max_retries=2):
     download_links = []
     clean_base_url = item_page_url.rstrip('/')
     
     if clean_base_url.endswith('/watch'):
         download_page_url = clean_base_url.replace('/watch', '/download')
+    elif clean_base_url.endswith('/download'):
+        download_page_url = clean_base_url
     else:
         download_page_url = f"{clean_base_url}/download"
 
-    try:
-        page.goto(download_page_url, wait_until="domcontentloaded", timeout=12000)
-        
-        links = page.evaluate("""() => {
-            const downloadElements = Array.from(document.querySelectorAll('a[href*="download"], a.link-download, a.btn-download, .download-link a, a[href*="niramirus"], a[href*="file"]'));
-            return downloadElements.map(el => el.href).filter(Boolean);
-        }""")
+    for attempt in range(max_retries):
+        try:
+            page.goto(download_page_url, wait_until="domcontentloaded", timeout=20000)
+            
+            # الانتظار القليل لضمان بناء العناصر في الصفحة
+            try:
+                page.wait_for_selector('a[href*="download"], a[href*="/link/"], .btn-download, a.download-link', timeout=5000)
+            except Exception:
+                pass
 
-        for link in links:
-            if is_valid_link(link) and link not in download_links:
-                download_links.append(link)
+            # استخراج جميع أنواع روابط وروابط السيرفرات والأزرار
+            links = page.evaluate("""() => {
+                const downloadElements = Array.from(document.querySelectorAll(`
+                    a[href*="download"], 
+                    a[href*="/link/"], 
+                    a[href*="niramirus"], 
+                    a[href*="file"], 
+                    a.link-download, 
+                    a.btn-download, 
+                    a.download-link, 
+                    .download-link a, 
+                    .buttons-list a,
+                    a.btn,
+                    a[class*="download"]
+                `));
+                return downloadElements.map(el => el.href).filter(Boolean);
+            }""")
 
-        frames = page.frames
-        for frame in frames:
-            f_url = frame.url
-            if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
-                if f_url not in download_links:
-                    download_links.append(f_url)
+            for link in links:
+                if is_valid_link(link) and link != download_page_url and link not in download_links:
+                    download_links.append(link)
 
-    except Exception as e:
-        print(f"⚠️ متعذر زيارة صفحة التحميل ({download_page_url}): {e}")
+            # فحص الـ Frames
+            for frame in page.frames:
+                f_url = frame.url
+                if f_url and "akwams.org" not in f_url and is_valid_link(f_url):
+                    if f_url not in download_links:
+                        download_links.append(f_url)
+
+            if download_links:
+                break # تم العثور على روابط بنجاح
+                
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"    ⚠️ متعذر زيارة صفحة التحميل ({download_page_url}): {e}")
+            time.sleep(1)
 
     return download_links
 
@@ -165,7 +193,7 @@ def fetch_download_links_only(page, item_page_url):
 # -------------------------------------------------------------
 def scrape_akwam_item_details(page, item_page_url):
     try:
-        page.goto(item_page_url, wait_until="domcontentloaded", timeout=10000)
+        page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception:
         return None
 
@@ -289,7 +317,7 @@ def scrape_akwam_item_details(page, item_page_url):
     }, category_type
 
 # -------------------------------------------------------------
-# 💾 دالة حفظ / استكمال روابط التحميل الناقصة في Supabase
+# 💾 دالة حفظ / تحديث البيانات مع التأكد التام من روابط التحميل
 # -------------------------------------------------------------
 def save_or_update_download_links(page, item_data, category_type, current_cat_url, item_page_url):
     title = item_data.get("title", "")
@@ -312,8 +340,9 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
             
             # إذا كانت روابط التحميل غير موجودة أو فارغة
             if not download_links:
-                print(f"🔄 الفيلم [{title}] موجود، لكن روابط التحميل غير متوفرة. جاري السحب والتحديث...")
+                print(f"🔄 الفيلم [{title}] موجود ببيانات ناقصة. جاري جلب روابط التحميل...")
                 new_download_links = fetch_download_links_only(page, item_page_url)
+                
                 if new_download_links:
                     updated_direct_links = {
                         "streaming_links": direct_links.get("streaming_links", []),
@@ -323,8 +352,10 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
                         "direct_links": updated_direct_links
                     }).eq("id", movie_id).execute()
                     print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الفيلم: {title}")
+                else:
+                    print(f"⚠️ فشل استخراج روابط تحميل لـ [{title}] بعد المحاولات. سيتم إعادتها لاحقاً.")
             else:
-                print(f"⏭️ الفيلم [{title}] موجود بالفعل ومكتمل، تخطي...")
+                print(f"⏭️ الفيلم [{title}] مكتمل ويحتوي على روابط التحميل، تخطي...")
             return
 
         # إذا لم يكن الفيلم موجوداً من الأساس => سحب البيانات الكاملة وحفظها
@@ -387,8 +418,9 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
             download_links = direct_links.get("download_links", [])
 
             if not download_links:
-                print(f"🔄 الحلقة [{title}] موجودة، لكن روابط التحميل غير متوفرة. جاري السحب والتحديث...")
+                print(f"🔄 الحلقة [{title}] موجودة ببيانات ناقصة. جاري جلب روابط التحميل...")
                 new_download_links = fetch_download_links_only(page, item_page_url)
+                
                 if new_download_links:
                     updated_direct_links = {
                         "streaming_links": direct_links.get("streaming_links", []),
@@ -398,8 +430,10 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
                         "direct_links": updated_direct_links
                     }).eq("id", ep_id).execute()
                     print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل لـ الحلقة: {title}")
+                else:
+                    print(f"⚠️ فشل استخراج روابط تحميل لـ الحلقة [{title}] بعد المحاولات.")
             else:
-                print(f"⏭️ الحلقة [{title}] موجودة بالفعل ومكتملة، تخطي...")
+                print(f"⏭️ الحلقة [{title}] مكتملة وتحتوي على روابط التحميل، تخطي...")
             return
 
         # إذا لم تكن الحلقة موجودة من الأساس => إضافتها بالكامل
@@ -418,7 +452,7 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
 # 🚀 السكربت الرئيسي
 # -------------------------------------------------------------
 def scrape_akwam_site():
-    print("🚀 بدء السكربت مع الفحص الذكي لروابط التحميل الناقصة لجميع الأقسام...")
+    print("🚀 بدء السكربت المحدث للحصول على جميع روابط التحميل بدون تفويت...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -428,7 +462,6 @@ def scrape_akwam_site():
         
         page = context.new_page()
         
-        # 📌 القائمة الكلية لجميع الأقسام المطلوبة
         target_categories = [
             "https://akwams.org/movies",
             "https://akwams.org/series",
@@ -505,7 +538,7 @@ def scrape_akwam_site():
                     break
 
         browser.close()
-        print("\n🎉 تمت العملية بنجاح لجميع الأقسام المطلوب سحبها!")
+        print("\n🎉 تمت العملية بنجاح لجميع الأقسام!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
