@@ -278,22 +278,26 @@ def process_series_item(page, item_page_url, episode_index=1):
         print(f"    ⚠️ صفحة غير صالحة، تم التخطّي.")
         return
 
-    # الاعتماد الأساسي على مؤشر الحلقة التصاعدي لضمان عدم تكرار نفس رقم الحلقة
-    episode_title = f"الحلقة {episode_index}"
-    
+    # جلب عنوان الحلقة تماماً كما هو ظاهر في الموقع دون أي قص أو تعديل
+    episode_title = ""
     try:
         page_h1 = page.evaluate("""() => {
             const h1 = document.querySelector('h1, h2, .episode-title, .title');
             return h1 ? h1.innerText.trim() : "";
         }""")
-        if page_h1:
-            match_num = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', page_h1)
-            if match_num:
-                episode_title = f"الحلقة {match_num.group(1)}"
+        if page_h1 and len(page_h1) > 2:
+            episode_title = page_h1
     except Exception:
         pass
 
-    print(f"    📺 تم العثور على حلقة: {episode_title}")
+    if not episode_title:
+        episode_title = raw_page_title
+
+    episode_title = clean_text(episode_title)
+    if not episode_title:
+        episode_title = f"الحلقة {episode_index}"
+
+    print(f"    📺 عنوان الحلقة المُستخرج (كما هو): {episode_title}")
 
     series_name = ""
     try:
@@ -357,7 +361,7 @@ def process_series_item(page, item_page_url, episode_index=1):
     try:
         existing_ep = supabase.table("episodes_cima").select("id").eq("title", episode_title).eq("series_id", series_id).execute()
         if existing_ep.data:
-            print(f"    ⏭️ هذه الحلقة ({episode_title}) موجودة مسبقاً ومتربطة بالمسلسل. تم التخطّي.")
+            print(f"    ⏭️ هذه الحلقة موجودة مسبقاً بنفس العنوان. تم التخطّي.")
             return
     except Exception:
         pass
