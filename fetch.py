@@ -240,7 +240,7 @@ def save_movie_to_supabase(item_data, current_cat_url):
     try:
         supabase.table("movies_cima").insert(formatted_movie).execute()
         print(f"    ✅ [تم حفظ الفيلم بنجاح]: {title}")
-    exceptException as e:
+    except Exception as e:
         print(f"    ❌ خطأ أثناء الحفظ في القاعدة لصالح ({title}): {e}")
 
 def scrape_akwam_site():
@@ -268,14 +268,12 @@ def scrape_akwam_site():
                 page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(2)
                 
-                # جلب روابط الأفلام الصحيحة التي تحتوي على اسم الفيلم وسنته أو رمز تعريفي طويل
                 item_links = page.evaluate("""() => {
                     const anchors = Array.from(document.querySelectorAll('a'));
                     const links = anchors.map(a => a.href).filter(h => {
                         if (!h || !h.includes('akwams.org')) return false;
                         if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/login') || h.includes('/recent')) return false;
                         if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
-                        // نتأكد أن الرابط يتبع هيكل الافلام (يحتوي على شرطات أو اسم فيلم طويل وليس مجرد كلمة قصيرة)
                         const parts = h.split('/').filter(Boolean);
                         return parts.length >= 3 && parts[parts.length - 1].length > 5;
                     });
