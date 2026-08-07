@@ -17,14 +17,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-BLOCKED_DOMAINS = [
-    "1xlite", "1xbet", "suphelper", "spendsdetachment", 
-    "kettledrooping", "googlesyndication", "adsterra", 
-    "propellerads", "traffic", "click", "registration",
-    "t.me", "actor", "page", "ad-policy", "dmca", "traincdn",
-    "akwams.org", "akwam"
-]
-
 def clean_text(text):
     if not text:
         return ""
@@ -37,19 +29,8 @@ def clean_title(raw_title):
     title = title.split("|")[0].split("-")[0]
     return clean_text(title)
 
-def is_valid_link(link):
-    if not link:
-        return False
-    link_lower = link.lower()
-    if "akwams.org" in link_lower or "akwam" in link_lower:
-        return False
-    for blocked in BLOCKED_DOMAINS:
-        if blocked in link_lower:
-            return False
-    return True
-
 def shorten_link_via_shrinkme(original_url):
-    if not original_url or not is_valid_link(original_url):
+    if not original_url:
         return original_url
     if "shrinkme.io" in original_url or "shrinkme.click" in original_url:
         return original_url
@@ -88,7 +69,7 @@ def get_tmdb_poster(title):
 def extract_category_from_url_or_page(cat_url, page_genres, title):
     url_lower = cat_url.lower()
     if "اجنبي" in url_lower:
-        return "افلام اجنبي" if "movies" in url_lower or "افلام" in url_lower else "مسلسلات اجنبي"
+        return "افلام اجنبي"
     elif "عربي" in url_lower:
         return "افلام عربي"
     elif "هندية" in url_lower:
@@ -96,59 +77,43 @@ def extract_category_from_url_or_page(cat_url, page_genres, title):
     elif "اسيوية" in url_lower:
         return "افلام اسيوية"
     elif "انمي" in url_lower:
-        return "افلام انمي" if "movies" in url_lower else "مسلسلات انمي"
-    elif "تركية" in url_lower:
-        return "مسلسلات تركية"
-    elif "series" in url_lower:
-        return "مسلسلات"
+        return "افلام انمي"
     for g in page_genres:
         clean_g = clean_text(g)
         if "افلام" in clean_g or "مسلسلات" in clean_g:
             return clean_g
-    if "مسلسل" in title or "الحلقة" in title:
-        return "مسلسلات"
     return "افلام عامة"
 
-def fetch_download_links_only(page, item_page_url, max_retries=2):
+def fetch_download_links_only(page, item_page_url):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
-    if "/series/" in clean_base_url and not any(x in clean_base_url for x in ["episode", "الحلقة", "movie"]):
-        return []
+    download_page_url = f"{clean_base_url}/download"
 
-    if clean_base_url.endswith('/watch'):
-        download_page_url = clean_base_url.replace('/watch', '/download')
-    elif clean_base_url.endswith('/download'):
-        download_page_url = clean_base_url
-    else:
-        download_page_url = f"{clean_base_url}/download"
-
-    for attempt in range(max_retries):
-        try:
-            page.goto(download_page_url, wait_until="domcontentloaded", timeout=20000)
-            links = page.evaluate("""() => {
-                const downloadElements = Array.from(document.querySelectorAll('a[href*="download"], a[href*="/link/"], a[href*="niramirus"], a[href*="file"], a.link-download, a.btn-download, a.download-link, .download-link a, .buttons-list a, a.btn, a[class*="download"]'));
-                return downloadElements.map(el => el.href).filter(Boolean);
-            }""")
-            for link in links:
-                if is_valid_link(link) and link != download_page_url and link not in raw_download_links:
-                    raw_download_links.append(link)
-            if raw_download_links:
-                break
-        except Exception:
-            time.sleep(1)
+    try:
+        page.goto(download_page_url, wait_until="domcontentloaded", timeout=15000)
+        links = page.evaluate("""() => {
+            const els = Array.from(document.querySelectorAll('a[href]'));
+            return els.map(el => el.href).filter(h => h.includes('download') || h.includes('link') || h.includes('file') || h.includes('niramirus'));
+        }""")
+        for link in links:
+            if link and link != download_page_url and link not in raw_download_links:
+                raw_download_links.append(link)
+    except Exception:
+        pass
 
     shortened_download_links = []
     for raw_link in raw_download_links:
         short_link = shorten_link_via_shrinkme(raw_link)
-        if is_valid_link(short_link):
+        if short_link:
             shortened_download_links.append(short_link)
     return shortened_download_links
 
 def scrape_akwam_item_details(page, item_page_url):
+    print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
-        print(f"❌ خطأ في فتح صفحة العنصر {item_page_url}: {e}")
+        print(f"    ❌ فشل فتح صفحة الفيلم: {e}")
         return None
 
     title = ""
@@ -159,11 +124,11 @@ def scrape_akwam_item_details(page, item_page_url):
     except Exception:
         pass
 
-    if not title or len(title) < 3:
+    if not title or len(title) < 2:
+        print(f"    ⚠️ العنوان غير صالح أو فارغ.")
         return None
 
-    is_series = "الحلقة" in title or "الموسم" in title or "/series/" in item_page_url
-    category_type = "series" if is_series else "movie"
+    print(f"    🎬 تم العثور على فيلم: {title}")
 
     year = None
     match = re.search(r'20\d{2}|19\d{2}', title)
@@ -176,9 +141,9 @@ def scrape_akwam_item_details(page, item_page_url):
     poster = "غير متوفر"
     try:
         poster = page.evaluate("""() => {
-            let metaImg = document.querySelector('meta[property="og:image"]') || document.querySelector('meta[name="twitter:image"]');
-            if (metaImg && metaImg.content && metaImg.content.startsWith('http')) return metaImg.content;
-            const el = document.querySelector('.entry-image img, .poster img, .movie-poster img, .details-img img, .img-fluid');
+            let metaImg = document.querySelector('meta[property="og:image"]');
+            if (metaImg && metaImg.content) return metaImg.content;
+            const el = document.querySelector('.entry-image img, .poster img, img');
             return el ? (el.src || el.getAttribute('data-src')) : "غير متوفر";
         }""")
     except Exception:
@@ -187,10 +152,10 @@ def scrape_akwam_item_details(page, item_page_url):
     description = "غير متوفر"
     try:
         desc_text = page.evaluate("""() => {
-            const el = document.querySelector('.widget-body .text-white, .story, div[class*="story"], article p');
+            const el = document.querySelector('.story, .text-white, article p');
             return el ? el.innerText.trim() : "غير متوفر";
         }""")
-        if desc_text and len(desc_text) > 10:
+        if desc_text and len(desc_text) > 5:
             description = desc_text
     except Exception:
         pass
@@ -214,21 +179,18 @@ def scrape_akwam_item_details(page, item_page_url):
     except Exception:
         pass
 
-    clean_base_url = item_page_url.rstrip('/')
-    watch_page_url = clean_base_url if clean_base_url.endswith('/watch') else f"{clean_base_url}/watch/"
+    watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = []
     try:
-        page.goto(watch_page_url, wait_until="domcontentloaded", timeout=12000)
-        frames = page.frames
-        for frame in frames:
-            f_url = frame.url
-            if f_url and is_valid_link(f_url):
-                extracted_streaming_links.append(f_url)
+        page.goto(watch_page_url, wait_until="domcontentloaded", timeout=10000)
+        for frame in page.frames:
+            if frame.url and "akwams.org" not in frame.url:
+                extracted_streaming_links.append(frame.url)
     except Exception:
         pass
 
     final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
-    extracted_download_links = fetch_download_links_only(page, item_page_url) if category_type == "movie" else []
+    extracted_download_links = fetch_download_links_only(page, item_page_url)
 
     direct_links_json = {
         "streaming_links": list(set(extracted_streaming_links)),
@@ -238,67 +200,51 @@ def scrape_akwam_item_details(page, item_page_url):
     return {
         "title": title,
         "year": year,
-        "category_type": category_type,
+        "category_type": "movie",
         "poster_url": poster,
         "description": description,
         "rating": rating,
         "genres": list(set(genres)),
         "watch_url": final_watch_url,
         "direct_links": direct_links_json
-    }, category_type
+    }
 
-def save_or_update_download_links(page, item_data, category_type, current_cat_url, item_page_url):
+def save_movie_to_supabase(item_data, current_cat_url):
     title = item_data.get("title", "")
-    if not title or len(title) < 3:
+    if not title:
         return
 
-    if category_type == "movie":
-        existing_movie = supabase.table("movies_cima").select("id, direct_links").eq("title", title).execute()
-        
-        if existing_movie.data:
-            row = existing_movie.data[0]
-            movie_id = row.get("id")
-            direct_links = row.get("direct_links") or {}
-            
-            if isinstance(direct_links, dict):
-                download_links = direct_links.get("download_links", [])
-                
-                if not download_links:
-                    print(f"🔄 الفيلم [{title}] موجود وروابط التحميل فارغة. جاري الجلب والتحديث...")
-                    new_download_links = fetch_download_links_only(page, item_page_url)
-                    
-                    if new_download_links:
-                        direct_links["download_links"] = list(set(new_download_links))
-                        supabase.table("movies_cima").update({"direct_links": direct_links}).eq("id", movie_id).execute()
-                        print(f"✅ تم تحديث وإضافة ({len(new_download_links)}) رابط تحميل للفيلم: {title}")
-                    else:
-                        print(f"⚠️ لم يتم العثور على روابط تحميل جديدة للفيلم: {title}")
-                else:
-                    print(f"⏭️ الفيلم [{title}] يحتوي على روابط تحميل بالفعل.")
-            return
+    existing = supabase.table("movies_cima").select("id").eq("title", title).execute()
+    if existing.data:
+        print(f"    ⏭️ الفيلم موجود مسبقاً في القاعدة: {title}")
+        return
 
-        raw_genres = item_data.get("genres", [])
-        clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
-        poster_url = item_data.get("poster_url", "غير متوفر")
-        if poster_url == "غير متوفر":
-            poster_url = get_tmdb_poster(title)
+    raw_genres = item_data.get("genres", [])
+    clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
+    poster_url = item_data.get("poster_url", "غير متوفر")
+    if poster_url == "غير متوفر" or not poster_url.startswith("http"):
+        poster_url = get_tmdb_poster(title)
 
-        formatted_movie = {
-            "title": title,
-            "category_type": clean_category,
-            "year": int(item_data["year"]) if item_data.get("year") else None,
-            "poster_url": poster_url,
-            "description": item_data.get("description", "غير متوفر"),
-            "rating": item_data.get("rating", "غير متوفر"),
-            "genres": [clean_text(g) for g in raw_genres if clean_text(g)],
-            "watch_url": item_data.get("watch_url"),
-            "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
-        }
-        supabase.table("movies_cima").upsert(formatted_movie, on_conflict="title").execute()
-        print(f"✅ [تم حفظ فيلم جديد]: {title}")
+    formatted_movie = {
+        "title": title,
+        "category_type": clean_category,
+        "year": int(item_data["year"]) if item_data.get("year") else None,
+        "poster_url": poster_url,
+        "description": item_data.get("description", "غير متوفر"),
+        "rating": item_data.get("rating", "غير متوفر"),
+        "genres": [clean_text(g) for g in raw_genres if clean_text(g)],
+        "watch_url": item_data.get("watch_url"),
+        "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
+    }
+    
+    try:
+        supabase.table("movies_cima").insert(formatted_movie).execute()
+        print(f"    ✅ [تم حفظ الفيلم بنجاح]: {title}")
+    except Exception as e:
+        print(f"    ❌ خطأ أثناء الحفظ في القاعدة لصالح ({title}): {e}")
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت الشامل لسحب أقسام الأفلام صفحة بصفحة...")
+    print("🚀 بدء السكربت المباشر لسحب الأفلام والحفظ الفوري...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -310,8 +256,7 @@ def scrape_akwam_site():
         base_category_url = "https://akwams.org/category/movies"
         page_number = 1
         
-        while True:
-            # تحديد رابط الصفحة الحالية بدقة
+        while page_number <= 3: # تجربة أول 3 صفحات للتأكد من السحب الكامل والحفظ
             if page_number == 1:
                 current_page_url = f"{base_category_url}/"
             else:
@@ -323,45 +268,37 @@ def scrape_akwam_site():
                 page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(2)
                 
-                # جلب الروابط برمجياً بالطريقة المضمونة
-                item_cards = page.evaluate("""() => {
-                    return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
+                item_links = page.evaluate("""() => {
+                    const anchors = Array.from(document.querySelectorAll('a'));
+                    const links = anchors.map(a => a.href).filter(h => {
                         if (!h || !h.includes('akwams.org')) return false;
-                        if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/user/')) return false;
+                        if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/')) return false;
                         if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
                         return h.split('/').length >= 4;
                     });
+                    return [...new Set(links)];
                 }""")
                 
-                item_links = list(set(item_cards))
-                
-                # إذا لم يتم العثور على أي عناصر في الصفحة الحالية، فهذا يعني أننا وصلنا لنهاية الصفحات
                 if not item_links:
-                    print(f"🏁 لا توجد عناصر أخرى في الصفحة رقم [{page_number}]. تم الانتهاء من سحب القسم بالكامل بنجاح!")
+                    print(f"🏁 لا توجد عناصر أخرى في الصفحة رقم [{page_number}].")
                     break
                 
-                print(f"🔗 عُثر على {len(item_links)} عنصر في هذه الصفحة. جاري معالجة وسحب البيانات...")
+                print(f"🔗 عُثر على {len(item_links)} رابط فيلم في هذه الصفحة. جاري سحبها وتخزينها...")
                 
                 for index, link in enumerate(item_links, 1):
-                    if not is_valid_link(link):
-                        continue
-                    
-                    print(f"  ⏳ معالجة العنصر ({index}/{len(item_links)})... الرابط: {link}")
-                    result = scrape_akwam_item_details(page, link)
-                    if result:
-                        item_data, cat_type = result
-                        if item_data and item_data.get("title"):
-                            save_or_update_download_links(page, item_data, cat_type, current_page_url, link)
+                    print(f"\n  -- فيلم ({index}/{len(item_links)})")
+                    item_data = scrape_akwam_item_details(page, link)
+                    if item_data:
+                        save_movie_to_supabase(item_data, current_page_url)
                 
-                # الانتقال للصفحة التالية فقط بعد التأكد من انتهاء الحالية بالكامل
                 page_number += 1
                 
             except Exception as e:
-                print(f"⚠️ حدث خطأ أو انتهت الصفحات عند الصفحة [{page_number}]: {e}")
+                print(f"⚠️ خطأ في الصفحة [{page_number}]: {e}")
                 break
 
         browser.close()
-        print("\n🎉 تم الانتهاء من كافة العمليات وحفظ البيانات في قاعدة البيانات بنجاح!")
+        print("\n🎉 تم الانتهاء من السحب والحفظ بنجاح تام!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
