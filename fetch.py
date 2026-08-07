@@ -29,7 +29,6 @@ def clean_title(raw_title):
     title = title.split("|")[0].split("-")[0]
     return clean_text(title)
 
-# دالة جديدة مخصصة لاستخراج اسم المسلسل بدقة
 def extract_series_name_from_title(raw_title):
     if not raw_title:
         return ""
@@ -43,20 +42,50 @@ def extract_season_and_episode(text):
     season_num = 1
     episode_num = 1
     
+    # قاموس لتحويل الأرقام المكتوبة بالعربي إلى أرقام صحيحة
+    arabic_numbers = {
+        "الاول": 1, "الأول": 1,
+        "الثاني": 2, "التاني": 2,
+        "الثالث": 3, "التالت": 3,
+        "الرابع": 4,
+        "الخامس": 5,
+        "السادس": 6,
+        "السابع": 7,
+        "الثامن": 8,
+        "التاسع": 9,
+        "العاشر": 10
+    }
+    
+    # 1. البحث عن الرقم العادي (مثل: الموسم 3)
     season_match = re.search(r'(?:الموسم|Season)\s*(\d+)', text, re.IGNORECASE)
     if season_match:
         try:
             season_num = int(season_match.group(1))
         except Exception:
             pass
-            
+    else:
+        # 2. البحث عن الرقم المكتوب كنص عربي (مثل: الموسم الثالث)
+        season_word_match = re.search(r'(?:الموسم|Season)\s*([أ-ي]+)', text, re.IGNORECASE)
+        if season_word_match:
+            word = season_word_match.group(1)
+            if word in arabic_numbers:
+                season_num = arabic_numbers[word]
+                
+    # استخراج رقم الحلقة
     episode_match = re.search(r'(?:الحلقة|Episode)\s*(\d+)', text, re.IGNORECASE)
     if episode_match:
         try:
             episode_num = int(episode_match.group(1))
         except Exception:
             pass
-            
+    else:
+        # احتياطي لو رقم الحلقة مكتوب بالعربي برضه
+        ep_word_match = re.search(r'(?:الحلقة|Episode)\s*([أ-ي]+)', text, re.IGNORECASE)
+        if ep_word_match:
+            word = ep_word_match.group(1)
+            if word in arabic_numbers:
+                episode_num = arabic_numbers[word]
+                
     return season_num, episode_num
 
 def shorten_link_via_shrinkme(original_url):
@@ -254,7 +283,7 @@ def process_movie_item(page, item_page_url):
     except Exception as e:
         print(f"    ❌ خطأ أثناء حفظ الفيلم: {e}")
 
-def process_series_item(page, item_page_url, episode_index=1):
+def process_series_item(page, item_page_url):
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
@@ -269,10 +298,8 @@ def process_series_item(page, item_page_url, episode_index=1):
     if not raw_page_title or "الصفحة الرئيسية" in raw_page_title or "تسجيل الدخول" in raw_page_title:
         return
 
-    # استخدام الطريقة الجديدة لاستخراج اسم المسلسل
     series_name = extract_series_name_from_title(raw_page_title)
 
-    # إذا فشل الاستخراج، لا تقم بوضع اسم افتراضي يفسد قاعدة البيانات بل تخطى الرابط
     if not series_name or len(series_name) < 2:
         print(f"    ⚠️ تعذر استخراج اسم المسلسل من الرابط. سيتم تخطي الرابط: {item_page_url}")
         return
@@ -382,7 +409,7 @@ def scrape_section(page, base_category_url, section_type):
             for index, link in enumerate(current_page_items, 1):
                 print(f"\n  -- عنصر ({index}/{len(current_page_items)})")
                 if section_type == "series":
-                    process_series_item(page, link, episode_index=index)
+                    process_series_item(page, link)
                 else:
                     process_movie_item(page, link)
             
