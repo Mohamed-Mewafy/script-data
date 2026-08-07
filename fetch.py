@@ -109,7 +109,7 @@ def fetch_download_links_only(page, item_page_url):
     return shortened_download_links
 
 def scrape_akwam_item_details(page, item_page_url):
-    print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
+    #print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
