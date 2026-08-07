@@ -109,33 +109,6 @@ def extract_category_from_url_or_page(cat_url, page_genres, title):
         return "مسلسلات"
     return "افلام عامة"
 
-def extract_series_and_episode_info(full_title):
-    ep_num = 1
-    ep_match = re.search(r'(?:الحلقة|ep|episode)\s*(\d+)', full_title, re.IGNORECASE)
-    if ep_match:
-        try:
-            ep_num = int(ep_match.group(1))
-        except Exception:
-            pass
-    season_num = 1
-    season_match = re.search(r'(?:الموسم|season|s)\s*(\d+)', full_title, re.IGNORECASE)
-    if season_match:
-        try:
-            season_num = int(season_match.group(1))
-        except Exception:
-            pass
-    series_title = full_title
-    series_title = re.sub(r'(?:الموسم|season|s)\s*\d+', '', series_title, flags=re.IGNORECASE)
-    series_title = re.sub(r'(?:الحلقة|ep|episode)\s*\d+', '', series_title, flags=re.IGNORECASE)
-    series_title = series_title.replace("مشاهدة", "").replace("مسلسل", "").replace("مترجم", "").replace("مدبلج", "").replace("اكوام", "").replace("Akwam", "")
-    series_title = series_title.split("|")[0].split("-")[0]
-    series_title = clean_text(series_title)
-    words = series_title.split()
-    if len(words) > 1 and len(words[-1]) == 1:
-        words.pop()
-        series_title = " ".join(words)
-    return series_title if series_title else full_title, season_num, ep_num
-
 def fetch_download_links_only(page, item_page_url, max_retries=2):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
@@ -325,7 +298,7 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
         print(f"✅ [تم حفظ فيلم جديد]: {title}")
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت بالمنطق القديم الناجح لاسترشاد الروابط...")
+    print("🚀 بدء السكربت الشامل لسحب أقسام الأفلام صفحة بصفحة...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -334,55 +307,61 @@ def scrape_akwam_site():
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
         page = context.new_page()
         
-        target_categories = [
-            "https://akwams.org/movies",
-        ]
-
-        for cat_url in target_categories:
-            print(f"\n📂 القسم: {cat_url}")
-            current_page_url = cat_url
-            page_number = 1
-            max_pages = 3  # تجربة على أول 3 صفحات للتأكد من عمل السكربت وسحب اللوج
+        base_category_url = "https://akwams.org/category/movies"
+        page_number = 1
+        
+        while True:
+            # تحديد رابط الصفحة الحالية بدقة
+            if page_number == 1:
+                current_page_url = f"{base_category_url}/"
+            else:
+                current_page_url = f"{base_category_url}/page/{page_number}/"
+                
+            print(f"\n📂 جاري فحص الصفحة رقم [{page_number}] | الرابط: {current_page_url}")
             
-            while current_page_url and page_number <= max_pages:
-                print(f"\n📄 صفحة رقم: [{page_number}] | الرابط: {current_page_url}")
-                try:
-                    page.goto(current_page_url, wait_until="domcontentloaded", timeout=20000)
-                    time.sleep(2)
-                    
-                    # الاستخدام المعتمد على الطريقة القديمة المضمونة لجلب الروابط برمجياً
-                    item_cards = page.evaluate("""() => {
-                        return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
-                            if (!h || !h.includes('akwams.org')) return false;
-                            if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/user/')) return false;
-                            if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
-                            return h.split('/').length >= 4;
-                        });
-                    }""")
-                    
-                    item_links = list(set(item_cards))
-                    print(f"🔗 عُثر على {len(item_links)} رابط في هذه الصفحة.")
-                    
-                    for index, link in enumerate(item_links, 1):
-                        if not is_valid_link(link):
-                            continue
-                        
-                        print(f"  ⏳ فحص العنصر ({index}/{len(item_links)})... الرابط: {link}")
-                        result = scrape_akwam_item_details(page, link)
-                        if result:
-                            item_data, cat_type = result
-                            if item_data and item_data.get("title"):
-                                save_or_update_download_links(page, item_data, cat_type, cat_url, link)
-                    
-                    page_number += 1
-                    current_page_url = f"{cat_url.rstrip('/')}/page/{page_number}"
-                        
-                except Exception as e:
-                    print(f"⚠️ خطأ في الصفحة: {e}")
+            try:
+                page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(2)
+                
+                # جلب الروابط برمجياً بالطريقة المضمونة
+                item_cards = page.evaluate("""() => {
+                    return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
+                        if (!h || !h.includes('akwams.org')) return false;
+                        if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/user/')) return false;
+                        if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
+                        return h.split('/').length >= 4;
+                    });
+                }""")
+                
+                item_links = list(set(item_cards))
+                
+                # إذا لم يتم العثور على أي عناصر في الصفحة الحالية، فهذا يعني أننا وصلنا لنهاية الصفحات
+                if not item_links:
+                    print(f"🏁 لا توجد عناصر أخرى في الصفحة رقم [{page_number}]. تم الانتهاء من سحب القسم بالكامل بنجاح!")
                     break
+                
+                print(f"🔗 عُثر على {len(item_links)} عنصر في هذه الصفحة. جاري معالجة وسحب البيانات...")
+                
+                for index, link in enumerate(item_links, 1):
+                    if not is_valid_link(link):
+                        continue
+                    
+                    print(f"  ⏳ معالجة العنصر ({index}/{len(item_links)})... الرابط: {link}")
+                    result = scrape_akwam_item_details(page, link)
+                    if result:
+                        item_data, cat_type = result
+                        if item_data and item_data.get("title"):
+                            save_or_update_download_links(page, item_data, cat_type, current_page_url, link)
+                
+                # الانتقال للصفحة التالية فقط بعد التأكد من انتهاء الحالية بالكامل
+                page_number += 1
+                
+            except Exception as e:
+                print(f"⚠️ حدث خطأ أو انتهت الصفحات عند الصفحة [{page_number}]: {e}")
+                break
 
         browser.close()
-        print("\n🎉 انتهى التنفيذ بنجاح!")
+        print("\n🎉 تم الانتهاء من كافة العمليات وحفظ البيانات في قاعدة البيانات بنجاح!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
