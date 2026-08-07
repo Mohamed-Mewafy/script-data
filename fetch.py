@@ -110,7 +110,7 @@ def fetch_download_links_only(page, item_page_url):
         }""")
         
         for link in links:
-            if link and link not in raw_download_links:
+            if link and link not in raw_download_links and not link.startswith("chrome-error://"):
                 raw_download_links.append(link)
                 
     except Exception as e:
@@ -132,7 +132,6 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(3)
         
-        # استهداف أزرار السيرفرات بناءً على محتوى النص (مثل سيرفر 1، سيرفر 2، إلخ) أو الأزرار المتاحة
         server_buttons = page.locator('button:has-text("سيرفر"), a:has-text("سيرفر"), .servers-list button, .servers-list li, div[class*="server"] button').all()
         
         if not server_buttons:
@@ -146,21 +145,26 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
                     btn.click(timeout=2000)
                     time.sleep(1.5)
                     
-                    # استخراج روابط الـ iframe أو الـ frames بعد الضغط
                     frame_url = page.evaluate("""() => {
                         const iframe = document.querySelector('iframe');
                         return iframe ? iframe.src : null;
                     }""")
                     
-                    if frame_url and frame_url not in extracted_streaming_links and "akwams" not in frame_url and "about:blank" not in frame_url:
+                    if (frame_url and 
+                        frame_url not in extracted_streaming_links and 
+                        "akwams" not in frame_url and 
+                        "about:blank" not in frame_url and
+                        not frame_url.startswith("chrome-error://")):
                         extracted_streaming_links.append(frame_url)
             except Exception:
                 pass
             
-            # فحص إضافي عبر الـ frames المتاحة في الصفحة
             for frame in page.frames:
                 f_url = frame.url
-                if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
+                if (f_url and 
+                    "akwams.org" not in f_url and 
+                    "about:blank" not in f_url and 
+                    not f_url.startswith("chrome-error://")):
                     if f_url not in extracted_streaming_links:
                         extracted_streaming_links.append(f_url)
                         
@@ -201,7 +205,6 @@ def process_movie_item(page, item_page_url, current_cat_url):
         existing_downloads = existing_direct_links.get("download_links", [])
         existing_streaming = existing_direct_links.get("streaming_links", [])
 
-        # إعادة الفحص لو روابط التحميل فارغة أو روابط المشاهدة فارغة / رابط واحد فقط
         is_downloads_empty = not existing_downloads or len(existing_downloads) == 0
         is_streaming_empty = not existing_streaming or len(existing_streaming) <= 1
 
@@ -316,8 +319,9 @@ def process_movie_item(page, item_page_url, current_cat_url):
         }
 
         try:
-            supabase.table("movies_cima").insert(formatted_movie).execute()
-            print(f"    ✅ [تم حفظ الفيلم الجديد بكامل روابطه وسيرفراته بنجاح]: {title}")
+            # استخدام upsert مع تحديد on_conflict لتجنب أخطاء تكرار الـ Unique Constraint
+            supabase.table("movies_cima").upsert(formatted_movie, on_conflict="title").execute()
+            print(f"    ✅ [تم حفظ أو تحديث الفيلم بكامل روابطه بنجاح]: {title}")
         except Exception as e:
             print(f"    ❌ خطأ أثناء حفظ الفيلم الجديد ({title}): {e}")
 
