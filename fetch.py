@@ -124,8 +124,8 @@ def scrape_akwam_item_details(page, item_page_url):
     except Exception:
         pass
 
-    if not title or len(title) < 2:
-        print(f"    ⚠️ العنوان غير صالح أو فارغ.")
+    if not title or len(title) < 2 or "الصفحة الرئيسية" in title or "تسجيل الدخول" in title:
+        print(f"    ⚠️ صفحة غير صالحة أو صفحة رئيسية/تسجيل دخول، تم التخطّي.")
         return None
 
     print(f"    🎬 تم العثور على فيلم: {title}")
@@ -240,11 +240,11 @@ def save_movie_to_supabase(item_data, current_cat_url):
     try:
         supabase.table("movies_cima").insert(formatted_movie).execute()
         print(f"    ✅ [تم حفظ الفيلم بنجاح]: {title}")
-    except Exception as e:
+    exceptException as e:
         print(f"    ❌ خطأ أثناء الحفظ في القاعدة لصالح ({title}): {e}")
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت المباشر لسحب الأفلام والحفظ الفوري...")
+    print("🚀 بدء السكربت المخصص لسحب الأفلام الحقيقية فقط...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -256,7 +256,7 @@ def scrape_akwam_site():
         base_category_url = "https://akwams.org/category/movies"
         page_number = 1
         
-        while page_number <= 3: # تجربة أول 3 صفحات للتأكد من السحب الكامل والحفظ
+        while page_number <= 3:
             if page_number == 1:
                 current_page_url = f"{base_category_url}/"
             else:
@@ -268,13 +268,16 @@ def scrape_akwam_site():
                 page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(2)
                 
+                # جلب روابط الأفلام الصحيحة التي تحتوي على اسم الفيلم وسنته أو رمز تعريفي طويل
                 item_links = page.evaluate("""() => {
                     const anchors = Array.from(document.querySelectorAll('a'));
                     const links = anchors.map(a => a.href).filter(h => {
                         if (!h || !h.includes('akwams.org')) return false;
-                        if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/')) return false;
+                        if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/login') || h.includes('/recent')) return false;
                         if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
-                        return h.split('/').length >= 4;
+                        // نتأكد أن الرابط يتبع هيكل الافلام (يحتوي على شرطات أو اسم فيلم طويل وليس مجرد كلمة قصيرة)
+                        const parts = h.split('/').filter(Boolean);
+                        return parts.length >= 3 && parts[parts.length - 1].length > 5;
                     });
                     return [...new Set(links)];
                 }""")
@@ -283,7 +286,7 @@ def scrape_akwam_site():
                     print(f"🏁 لا توجد عناصر أخرى في الصفحة رقم [{page_number}].")
                     break
                 
-                print(f"🔗 عُثر على {len(item_links)} رابط فيلم في هذه الصفحة. جاري سحبها وتخزينها...")
+                print(f"🔗 عُثر على {len(item_links)} رابط فيلم حقيقي في هذه الصفحة. جاري سحبها وتخزينها...")
                 
                 for index, link in enumerate(item_links, 1):
                     print(f"\n  -- فيلم ({index}/{len(item_links)})")
