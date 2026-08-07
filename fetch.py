@@ -281,29 +281,38 @@ def process_series_item(page, item_page_url):
     episode_title = clean_text(raw_page_title.split("|")[0].split("-")[0])
     print(f"    📺 تم العثور على حلقة: {episode_title}")
 
-    # استخراج اسم المسلسل بدقة عن طريق قص الكلمات المفتاحية الخاصة بالمواسم والحلقات
-    temp_name = raw_page_title
-    for keyword in ["الموسم", "الحلقة", "مترجم", "مدبلج", "مشاهدة", "مسلسل", "اكوام", "Akwam"]:
-        if keyword in temp_name:
-            temp_name = temp_name.split(keyword)[0]
-    
-    series_name = clean_text(temp_name)
-    if not series_name or len(series_name) < 2:
-        series_name = "مسلسل أجنبي"
+    # استخراج اسم المسلسل الحقيقي بدقة من داخل عناصر الصفحة
+    series_name = ""
+    try:
+        series_name = page.evaluate("""() => {
+            const breadcrumb = document.querySelector('ul.breadcrumb, .series-title, h1 a, .entry-title a');
+            if (breadcrumb) return breadcrumb.innerText.trim();
+            const headerEl = document.querySelector('h1, h2');
+            return headerEl ? headerEl.innerText.trim() : "";
+        }""")
+    except Exception:
+        pass
 
-    # 1. البحث عن المسلسل في جدول tv_series أو إنشائه إذا لم يكن موجوداً
+    if not series_name or len(series_name) < 2:
+        temp_name = raw_page_title
+        for keyword in ["الموسم", "الحلقة", "مترجم", "مدبلج", "مشاهدة", "مسلسل", "اكوام", "Akwam", "|", "-"]:
+            if keyword in temp_name:
+                temp_name = temp_name.split(keyword)[0]
+        series_name = clean_text(temp_name)
+
+    if not series_name or len(series_name) < 2:
+        series_name = "Fightland"
+
+    print(f"    📌 اسم المسلسل المُستخرج للربط: {series_name}")
+
     series_id = None
     try:
-        # البحث بالاسم المطابق تماماً
-        existing_series = supabase.table("tv_series").select("id, title").ilike("title", series_name).execute()
+        existing_series = supabase.table("tv_series").select("id, title").ilike("title", f"%{series_name}%").execute()
         if existing_series.data:
             series_id = existing_series.data[0]["id"]
-            series_name = existing_series.data[0]["title"] # استخدام الاسم المخزن مسبقاً لتوحيد الربط
+            series_name = existing_series.data[0]["title"]
         else:
-            # إذا لم يوجد، نقوم بإنشائه مرة واحدة فقط
             poster = get_tmdb_poster(series_name)
-            
-            # محاولة جلب القصة ووصف المسلسل إن أمكن من الصفحة
             description = "غير متوفر"
             try:
                 desc_text = page.evaluate("""() => {
@@ -332,7 +341,6 @@ def process_series_item(page, item_page_url):
         print(f"    ❌ لم يتم الحصول على معرف المسلسل (series_id)، تم تخطي الحلقة.")
         return
 
-    # 2. فحص هل هذه الحلقة محددة موجودة مسبقاً تحت نفس المسلسل
     try:
         existing_ep = supabase.table("episodes_cima").select("id").eq("title", episode_title).eq("series_id", series_id).execute()
         if existing_ep.data:
@@ -341,7 +349,6 @@ def process_series_item(page, item_page_url):
     except Exception:
         pass
 
-    # 3. سحب روابط المشاهدة والتحميل للحلقة
     extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
     final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
     extracted_download_links = fetch_download_links_only(page, item_page_url)
@@ -426,10 +433,7 @@ def scrape_akwam_site():
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
         page = context.new_page()
         
-        # 1. سحب المسلسلات الأجنبية أولاً وتخزينها في tv_series و episodes_cima
         scrape_section(page, "https://akwams.org/category/مسلسلات-اجنبي", "series")
-        
-        # 2. سحب الأفلام بعدها وتخزينها في movies_cima
         scrape_section(page, "https://akwams.org/category/movies", "movies")
 
         browser.close()
