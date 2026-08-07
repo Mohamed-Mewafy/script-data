@@ -11,7 +11,7 @@ from supabase import create_client, Client
 # ضبط متغيرات البيئة الخاصة بـ Supabase و ShrinkMe
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN",)
+SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل صحيح.")
@@ -391,6 +391,8 @@ def save_or_update_download_links(page, item_data, category_type, current_cat_ur
                         }).eq("id", movie_id).execute()
                         
                         print(f"✅ تم إضافة ({len(new_download_links)}) رابط تحميل مختصر لـ الفيلم: {title}")
+                    else:
+                        print(f"⚠️ لم يتم العثور على روابط تحميل صالحة للفيلم: {title}")
                 else:
                     print(f"⏭️ الفيلم [{title}] يحتوي بالفعل على روابط تحميل، تخطي...")
             return
@@ -528,7 +530,6 @@ def scrape_akwam_site():
                         }""")
                         print(f"📌 إجمالي عدد الصفحات لهذا القسم: {max_pages}")
 
-                    # 🛠️ التعديل هنا: سحب روابط الأفلام مباشرة باستخدام الكلاس a.box
                     item_cards = page.evaluate("""() => {
                         const cards = document.querySelectorAll('a.box');
                         return Array.from(cards).map(a => a.href).filter(Boolean);
@@ -541,7 +542,7 @@ def scrape_akwam_site():
                         if not is_valid_link(link):
                             continue
                         
-                        print(f"    ⏳ فحص العنصر ({index}/{len(item_links)})...")
+                        print(f"    ⏳ فحص العنصر ({index}/{len(item_links)}): {link}")
                         result = scrape_akwam_item_details(page, link)
                         if result:
                             item_data, cat_type = result
