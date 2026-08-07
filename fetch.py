@@ -20,15 +20,36 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 def clean_text(text):
     return " ".join(re.sub(r'[\"\'\[\]\{\}]', '', text).split()).strip()
 
-def extract_series_name_from_title(raw_title):
+def normalize_series_title(raw_title):
+    # تنظيف العنوان الأساسي
     name = re.sub(r'^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج)?\s*', '', raw_title).strip()
-    name = re.sub(r'\s*(الموسم|Season|الحلقة|مترجم|مدبلج|اكوام|Akwam|-|\|).*', '', name, flags=re.IGNORECASE).strip()
-    return clean_text(name)
+    
+    # استخراج رقم الموسم بدقة وتوحيده
+    season_num = 1
+    s_match = re.search(r'(?:الموسم|Season)\s*(?:الـ|ال)?\s*(\d+)', name, re.IGNORECASE)
+    if s_match:
+        season_num = int(s_match.group(1))
+    else:
+        # الكشف عن الأرقام العربية للمواسم لو وجدت
+        arabic_numbers = {"الاول": 1, "الأول": 1, "الاولى": 1, "الثاني": 2, "الثانية": 2, "الثالث": 3, "الرابع": 4, "الخامس": 5}
+        for word, num in arabic_numbers.items():
+            if word in name:
+                season_num = num
+                break
 
-def extract_season_and_episode(text):
-    s_match = re.search(r'(?:الموسم|Season)\s*(?:الـ|ال)?\s*(\d+)', text, re.IGNORECASE)
+    # حذف كلمة الموسم وأي زوائد للحصول على اسم المسلسل الصافي فقط
+    clean_name = re.sub(r'\s*(الموسم|Season|الاول|الأول|الثاني|الثالث|الرابع|الحلقة|\d+|-|\||مترجم|مدبلج|اكوام|Akwam).*', '', name, flags=re.IGNORECASE).strip()
+    clean_name = clean_text(clean_name)
+    
+    if not clean_name:
+        clean_name = "مسلسل غير معروف"
+
+    # إرجاع اسم المسلسل موحداً تماماً مع رقمه (مثال: Fightland - الموسم 1)
+    return f"{clean_name} - الموسم {season_num}", season_num
+
+def extract_episode_number(text):
     e_match = re.search(r'(?:الحلقة|Episode)\s*(?:الـ|ال)?\s*(\d+)', text, re.IGNORECASE)
-    return int(s_match.group(1)) if s_match else 1, int(e_match.group(1)) if e_match else 1
+    return int(e_match.group(1)) if e_match else 1
 
 def fetch_streaming_links_with_clicking(page, item_page_url):
     extracted = []
@@ -51,12 +72,14 @@ def process_series_item(page, item_page_url):
         title = clean_text(page.title())
     except: return
 
-    base_name = extract_series_name_from_title(title)
-    s_num, e_num = extract_season_and_episode(title)
-    
-    unique_season_title = f"{base_name} - الموسم {s_num}"
+    invalid_keywords = ["page not found", "404", "افلام", "أفلام", "انمي", "ات انمي", "ات اجنبي", "رمضان"]
+    if not title or any(kw in title.lower() for kw in invalid_keywords):
+        return
 
-    # 1. البحث عن هذا الموسم أو إضافته
+    unique_season_title, s_num = normalize_series_title(title)
+    e_num = extract_episode_number(title)
+
+    # 1. البحث الدقيق بالاسم الموحد لعدم تكرار إنشاء المسلسل
     existing = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
     
     if existing.data:
@@ -81,18 +104,14 @@ def process_series_item(page, item_page_url):
         "direct_links": {"streaming_links": links}
     }
     
-    # 2. استخدام Insert مباشر مع التحقق لمنع الأخطاء
     try:
-        # فحص هل الحلقة موجودة مسبقاً بنفس المسلسل ورقم الحلقة لتجنب التكرار برمجياً
         check_ep = supabase.table("episodes_cima").select("id").eq("series_id", series_id).eq("season_number", s_num).eq("episode_number", e_num).execute()
         
         if check_ep.data:
-            # تحديث الرابط لو موجودة
             ep_id = check_ep.data[0]["id"]
             supabase.table("episodes_cima").update(episode_data).eq("id", ep_id).execute()
-            print(f"    🔄 تم تحديث الحلقة الحالية بنجاح.")
+            print(f"    🔄 تم تحديث الحلقة بنجاح.")
         else:
-            # إضافتها لو مش موجودة
             supabase.table("episodes_cima").insert(episode_data).execute()
             print(f"    ✅ تم حفظ الحلقة بنجاح.")
     except Exception as e:
