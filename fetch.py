@@ -92,23 +92,30 @@ def fetch_download_links_only(page, item_page_url):
     try:
         page.goto(download_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
-        # البحث الشامل عن الروابط داخل صفحة التحميل بما في ذلك روابط الجودات المختلفة
+        
+        # استخراج جميع الروابط المرשطة بأزرار التحميل أو الـ Links داخل صفحة التحميل في أكوام
         links = page.evaluate("""() => {
-            const els = Array.from(document.querySelectorAll('a[href]'));
-            return els.map(el => el.href).filter(h => {
-                return h && (
-                    h.includes('download') || 
-                    h.includes('link') || 
-                    h.includes('file') || 
-                    h.includes('niramirus') || 
-                    h.includes('server') ||
-                    h.includes('direct')
-                );
+            const anchors = Array.from(document.querySelectorAll('a[href]'));
+            return anchors.map(a => a.href).filter(h => {
+                if (!h) return false;
+                // استبعاد رابط الصفحة نفسها أو الروابط الرئيسية
+                if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
+                // التقاط أي رابط يحتوي على مسارات التحميل أو الملفات أو الـ Redirects الخارجية
+                return h.includes('download') || 
+                       h.includes('link') || 
+                       h.includes('file') || 
+                       h.includes('niramirus') || 
+                       h.includes('server') ||
+                       h.includes('direct') ||
+                       h.includes('get') ||
+                       !h.includes('akwams.org'); // الروابط الخارجية للتحميل مثل السيرفرات المباشرة
             });
         }""")
+        
         for link in links:
-            if link and link != download_page_url and link not in raw_download_links:
+            if link and link not in raw_download_links:
                 raw_download_links.append(link)
+                
     except Exception as e:
         print(f"    ⚠️ خطأ أثناء سحب روابط التحميل: {e}")
 
@@ -116,7 +123,8 @@ def fetch_download_links_only(page, item_page_url):
     for raw_link in raw_download_links:
         short_link = shorten_link_via_shrinkme(raw_link)
         if short_link:
-            shortened_download_links.appends(short_link) if hasattr(shortened_download_links, 'appends') else shortened_download_links.append(short_link)
+            shortened_download_links.append(short_link)
+            
     return list(set(shortened_download_links))
 
 def fetch_streaming_links_with_clicking(page, item_page_url):
@@ -126,30 +134,26 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
         
-        # استهداف جميع أزرار وعناصر السيرفرات المتاحة في صفحة المشاهدة لأكوام بدقة عالية
-        buttons = page.locator('.servers-list button, .servers-list li, .watch-servers button, div[class*="server"] button, ul.servers li, .servers-items span, .server-item').all()
+        # استهداف جميع أزرار وعناصر السيرفرات المتاحة في صفحة المشاهدة
+        buttons = page.locator('.servers-list button, .servers-list li, .watch-servers button, div[class*="server"] button, ul.servers li, .servers-items span, .server-item, .btn').all()
         
         if not buttons:
-            # محاولة بديلة عامة للأزرار في حال اختلاف الكلاسات
-            buttons = page.locator('button, .btn').all()
+            buttons = page.locator('button').all()
 
-        # الضغط على كل سيرفر وتجميع روابط الـ Iframes الناتجة
         for btn in buttons:
             try:
                 if btn.is_visible():
                     btn.click(timeout=2000)
-                    time.sleep(1.5) # الانتظار لتحميل مصدر المشاهدة الجديد داخل الـ iframe
+                    time.sleep(1.5)
             except Exception:
                 pass
             
-            # فحص الإطارات الحالية وجلب الروابط الخارجية (غير التابعة لأكوام)
             for frame in page.frames:
                 f_url = frame.url
                 if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
                     if f_url not in extracted_streaming_links:
                         extracted_streaming_links.append(f_url)
                         
-        # فحص إضافي لو لم يتم التقاط روابط عبر الضغط
         if not extracted_streaming_links:
             for frame in page.frames:
                 f_url = frame.url
