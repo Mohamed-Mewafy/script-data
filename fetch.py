@@ -261,7 +261,7 @@ def process_movie_item(page, item_page_url, current_cat_url):
     except Exception as e:
         print(f"    ❌ خطأ أثناء حفظ الفيلم ({title}): {e}")
 
-def process_series_item(page, item_page_url):
+def process_series_item(page, item_page_url, episode_index=1):
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
@@ -278,13 +278,15 @@ def process_series_item(page, item_page_url):
         print(f"    ⚠️ صفحة غير صالحة، تم التخطّي.")
         return
 
-    # استخراج رقم الحلقة الصحيح بدقة من عنوان الصفحة
-    episode_title = "الحلقة"
-    ep_match = re.search(r'(الحلقة\s+\d+|الموسم\s+\d+\s+الحلقة\s+\d+|حلقة\s+\d+)', raw_page_title)
-    if ep_match:
-        episode_title = ep_match.group(0)
-    else:
-        episode_title = clean_text(raw_page_title.split("|")[0].split("-")[0])
+    # استخراج رقم الحلقة بدقة تامة (بالبحث المباشر أو الاعتماد على الترتيب التصاعدي في القائمة لتجنب تكرار "الحلقة 1")
+    episode_title = f"الحلقة {episode_index}"
+    
+    # محاولة قراءة الرقم الفعلي من نص العنوان الداخلي إن وجد بشكل صريح
+    match_ep_num = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', raw_page_title)
+    if match_ep_num:
+        extracted_num = match_ep_num.group(1)
+        # إذا وجدنا رقماً حقيقياً داخل العنوان غير الواحد المتكرر أو لضمان الدقة
+        episode_title = f"الحلقة {extracted_num}"
 
     print(f"    📺 تم العثور على حلقة: {episode_title}")
 
@@ -420,7 +422,7 @@ def scrape_section(page, base_category_url, section_type):
             for index, link in enumerate(item_links, 1):
                 print(f"\n  -- عنصر ({index}/{len(item_links)})")
                 if section_type == "series":
-                    process_series_item(page, link)
+                    process_series_item(page, link, episode_index=index)
                 else:
                     process_movie_item(page, link, current_page_url)
             
