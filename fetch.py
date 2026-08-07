@@ -163,10 +163,16 @@ def process_series_item(page, item_page_url):
         return
     
     title = page.title()
+    
+    # 🛑 فلترة صفحات الخطأ أو الروابط الميتة
+    if not title or "Page Not Found" in title or "404" in title:
+        print(f"⚠️ تجاهل رابط غير صالح أو صفحة غير موجودة: {item_page_url}")
+        return
+
     series_name = extract_series_name_from_title(title)
     season_number, episode_number = extract_season_and_episode(title)
     
-    if not series_name or len(series_name) < 2: 
+    if not series_name or len(series_name) < 2 or series_name.lower() in ["s1e1", "الحلقة"]: 
         return
 
     try:
@@ -174,7 +180,7 @@ def process_series_item(page, item_page_url):
         if series.data:
             s_id = series.data[0]["id"]
             if supabase.table("episodes_cima").select("id").eq("series_id", s_id).eq("season_number", season_number).eq("episode_number", episode_number).execute().data:
-                print(f"⏭️ تخطي: {series_name} S{season_number}E{episode_number}")
+                print(f"⏭️ تخطي (موجود مسبقاً): {series_name} S{season_number}E{episode_number}")
                 return
     except Exception: 
         pass
