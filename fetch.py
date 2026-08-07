@@ -108,20 +108,49 @@ def fetch_download_links_only(page, item_page_url):
             shortened_download_links.append(short_link)
     return shortened_download_links
 
-def fetch_streaming_links_only(page, item_page_url):
+def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = []
     try:
-        page.goto(watch_page_url, wait_until="domcontentloaded", timeout=10000)
-        for frame in page.frames:
-            if frame.url and "akwams.org" not in frame.url:
-                extracted_streaming_links.append(frame.url)
-    except Exception:
-        pass
+        page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
+        time.sleep(1)
+        
+        # العثور على أزرار السيرفرات والضغط عليها واحداً تلو الآخر
+        server_buttons = page.locator('button, .server-item, .btn-server, div[class*="server"], ul li').all()
+        
+        # البدء بالضغط المباشر على الأزرار التي توجد داخل صفحة المشاهدة
+        # نحدد عناصر تبديل السيرفرات بدقة بناءً على شكل أقسام أكوام
+        buttons = page.locator('text=/سيرفر/').all()
+        if not buttons:
+            buttons = page.locator('.servers-list button, .servers-list div, .watch-servers button').all()
+
+        for btn in buttons:
+            try:
+                btn.click(timeout=2000)
+                time.sleep(1) # إعطاء فرصة للـ iframe للتحميل والتغيير
+            except Exception:
+                pass
+            
+            # جمع الروابط من الإطارات الحالية بعد كل ضغطة
+            for frame in page.frames:
+                f_url = frame.url
+                if f_url and "akwams.org" not in f_url and f_url not in extracted_streaming_links:
+                    extracted_streaming_links.append(f_url)
+                    
+        # جلب أي iframe ظاهري أو مصدر فيديو حالي في الصفحة الرئيسية أيضاً
+        if not extracted_streaming_links:
+            for frame in page.frames:
+                f_url = frame.url
+                if f_url and "akwams.org" not in f_url:
+                    extracted_streaming_links.append(f_url)
+                    
+    except Exception as e:
+        print(f"    ⚠️ خطأ أثناء سحب روابط المشاهدة بالتفليش: {e}")
+        
     return list(set(extracted_streaming_links))
 
 def process_movie_item(page, item_page_url, current_cat_url):
-    print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
+   # print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
@@ -142,44 +171,61 @@ def process_movie_item(page, item_page_url, current_cat_url):
 
     print(f"    🎬 تم العثور على فيلم: {title}")
 
-    # الخطوة الأولى: التحقق هل الفيلم موجود مسبقاً في قاعدة البيانات؟
-    existing = supabase.table("movies_cima").select("id, direct_links").eq("title", title).execute()
+    # التحقق هل الفيلم موجود مسبقاً في قاعدة البيانات؟
+    existing = supabase.table("movies_cima").select("id, direct_links, watch_url").eq("title", title).execute()
 
     if existing.data:
-        # الفيلم موجود، نتحقق من روابط التحميل هل هي موجودة بالفعل أم لا؟
         current_data = existing.data[0]
         existing_direct_links = current_data.get("direct_links", {})
         if not isinstance(existing_direct_links, dict):
             existing_direct_links = {}
             
         existing_downloads = existing_direct_links.get("download_links", [])
+        existing_streaming = existing_direct_links.get("streaming_links", [])
 
-        # لو روابط التحميل موجودة وليست فارغة، نتخطى الفيلم تماماً
-        if existing_downloads and len(existing_downloads) > 0:
-            print(f"    ⏭️ الفيلم موجود ولديه روابط تحميل مسبقاً. تم التخطّي.")
+        is_downloads_empty = not existing_downloads or len(existing_downloads) == 0
+        is_streaming_empty = not existing_streaming or len(existing_streaming) == 0
+
+        # لو الاتنين موجودين ومش فاضيين، نتخطى الفيلم تماماً
+        if not is_downloads_empty and not is_streaming_empty:
+            print(f"    ⏭️ الفيلم موجود وبعمل كامل روابط التحميل والمشاهدة. تم التخطّي.")
             return
 
-        # لو روابط التحميل ناقصة أو فارغة، نقوم بسحبها وتحديثها فقط
-        print(f"    ⚠️ الفيلم موجود ولكن روابط التحميل فارغة. جاري سحب وتحديث روابط التحميل فقط...")
-        extracted_download_links = fetch_download_links_only(page, item_page_url)
-        
-        if extracted_download_links:
-            existing_direct_links["download_links"] = extracted_download_links
+        updated_needed = False
+        updates_payload = {}
+
+        # لو روابط التحميل فاضية، نسحبها ونحدثها
+        if is_downloads_empty:
+            print(f"    ⚠️ روابط التحميل فارغة. جاري سحبها...")
+            extracted_download_links = fetch_download_links_only(page, item_page_url)
+            if extracted_download_links:
+                existing_direct_links["download_links"] = extracted_download_links
+                updated_needed = True
+
+        # لو روابط المشاهدة فاضية، نسحبها بالضغط على السيرفرات ونحدثها
+        if is_streaming_empty:
+            print(f"    ⚠️ روابط المشاهدة (streaming_links) فارغة. جاري الضغط على السيرفرات وسحبها...")
+            extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
+            if extracted_streaming_links:
+                existing_direct_links["streaming_links"] = extracted_streaming_links
+                updates_payload["watch_url"] = extracted_streaming_links[0]
+                updated_needed = True
+
+        if updated_needed:
+            updates_payload["direct_links"] = existing_direct_links
             try:
-                supabase.table("movies_cima").update({
-                    "direct_links": existing_direct_links
-                }).eq("title", title).execute()
-                print(f"    🔄 [تم تحديث روابط التحميل بنجاح للفيلم]: {title}")
+                supabase.table("movies_cima").update(updates_payload).eq("title", title).execute()
+                print(f"    🔄 [تم تحديث الروابط الناقصة بنجاح للفيلم]: {title}")
             except Exception as e:
-                print(f"    ❌ خطأ أثناء تحديث روابط التحميل لـ ({title}): {e}")
+                print(f"    ❌ خطأ أثناء تحديث الروابط لـ ({title}): {e}")
         else:
-            print(f"    ℹ️ لا توجد روابط تحميل جديدة متاحة في الموقع حالياً لهذا الفيلم.")
+            print(f"    ℹ️ لم يتم العثور على روابط جديدة لإضافتها لهذا الفيلم.")
             
     else:
-        # الفيلم غير موجود تماماً، نسحب أولاً روابط المشاهدة ثم روابط التحميل ونحفظه جديداً
-        print(f"    🆕 الفيلم غير موجود. جاري سحب روابط المشاهدة أولاً ثم التحميل...")
+        # الفيلم غير موجود تماماً، نسحب كل شيء ونحفظه جديداً
+        print(f"    🆕 الفيلم غير موجود. جاري سحب روابط المشاهدة والتحميل وحفظه...")
         
-        extracted_streaming_links = fetch_streaming_links_only(page, item_page_url)
+        extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
         final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
 
         extracted_download_links = fetch_download_links_only(page, item_page_url)
@@ -256,12 +302,12 @@ def process_movie_item(page, item_page_url, current_cat_url):
 
         try:
             supabase.table("movies_cima").insert(formatted_movie).execute()
-            print(f"    ✅ [تم حفظ الفيلم الجديد بكامل روابطه بنجاح]: {title}")
+            print(f"    ✅ [تم حفظ الفيلم الجديد بكامل روابطه وسيرفراته بنجاح]: {title}")
         except Exception as e:
             print(f"    ❌ خطأ أثناء حفظ الفيلم الجديد ({title}): {e}")
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت للعمل حتى نهاية المحتوى مع المنطق الصحيح...")
+    print("🚀 بدء السكربت لتفليش وسحب السيرفرات والتحميل لكل الأفلام...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
