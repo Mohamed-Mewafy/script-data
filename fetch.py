@@ -109,7 +109,7 @@ def fetch_download_links_only(page, item_page_url):
     return shortened_download_links
 
 def scrape_akwam_item_details(page, item_page_url):
-   # print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
+    print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
@@ -214,11 +214,6 @@ def save_movie_to_supabase(item_data, current_cat_url):
     if not title:
         return
 
-    existing = supabase.table("movies_cima").select("id").eq("title", title).execute()
-    if existing.data:
-        print(f"    ⏭️ الفيلم موجود مسبقاً في القاعدة: {title}")
-        return
-
     raw_genres = item_data.get("genres", [])
     clean_category = extract_category_from_url_or_page(current_cat_url, raw_genres, title)
     poster_url = item_data.get("poster_url", "غير متوفر")
@@ -236,15 +231,28 @@ def save_movie_to_supabase(item_data, current_cat_url):
         "watch_url": item_data.get("watch_url"),
         "direct_links": item_data.get("direct_links", {"streaming_links": [], "download_links": []})
     }
+
+    # التحقق هل الفيلم موجود مسبقاً في قاعدة البيانات أم لا
+    existing = supabase.table("movies_cima").select("id, direct_links, watch_url").eq("title", title).execute()
     
     try:
-        supabase.table("movies_cima").insert(formatted_movie).execute()
-        print(f"    ✅ [تم حفظ الفيلم بنجاح]: {title}")
+        if existing.data:
+            # الفيلم موجود، نقوم بتحديث روابط التحميل والمشاهدة لضمان تحديثها دائماً
+            supabase.table("movies_cima").update({
+                "direct_links": formatted_movie["direct_links"],
+                "watch_url": formatted_movie["watch_url"],
+                "rating": formatted_movie["rating"]
+            }).eq("title", title).execute()
+            print(f"    🔄 [تم تحديث روابط الفيلم بنجاح]: {title}")
+        else:
+            # الفيلم غير موجود، نضيفه لأول مرة
+            supabase.table("movies_cima").insert(formatted_movie).execute()
+            print(f"    ✅ [تم حفظ الفيلم جديداً بنجاح]: {title}")
     except Exception as e:
-        print(f"    ❌ خطأ أثناء الحفظ في القاعدة لصالح ({title}): {e}")
+        print(f"    ❌ خطأ أثناء حفظ/تحديث القاعدة لصالح ({title}): {e}")
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت الشامل لسحب كل صفحات الأفلام حتى النهاية...")
+    print("🚀 بدء السكربت الشامل لسحب وفحص وتحديث كل الأفلام حتى النهاية...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -256,7 +264,6 @@ def scrape_akwam_site():
         base_category_url = "https://akwams.org/category/movies"
         page_number = 1
         
-        # حلقة غير محدودة (تستمر حتى تنتهي صفحات الموقع تماماً)
         while True:
             if page_number == 1:
                 current_page_url = f"{base_category_url}/"
@@ -268,9 +275,8 @@ def scrape_akwam_site():
             try:
                 response = page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
                 
-                # لو الموقع رجع خطأ 404 أو الصفحة مش موجودة، يبقى كده خلصنا كل الصفحات
                 if response and response.status == 404:
-                    print(f"🏁 وصلنا إلى نهاية الصفحات (خطأ 404). تم الانتهاء من سحب كافة محتوى الموقع بنجاح!")
+                    print(f"🏁 وصلنا إلى نهاية الصفحات (خطأ 404). تم الانتهاء من فحص كافة محتوى الموقع بنجاح!")
                     break
 
                 time.sleep(2)
@@ -291,7 +297,7 @@ def scrape_akwam_site():
                     print(f"🏁 لا توجد عناصر أو روابط أخرى في الصفحة رقم [{page_number}]. تم الانتهاء!")
                     break
                 
-                print(f"🔗 عُثر على {len(item_links)} رابط فيلم في هذه الصفحة. جاري سحبها وتخزينها...")
+                print(f"🔗 عُثر على {len(item_links)} رابط فيلم في هذه الصفحة. جاري فحصها وتحديثها...")
                 
                 for index, link in enumerate(item_links, 1):
                     print(f"\n  -- فيلم ({index}/{len(item_links)})")
@@ -306,7 +312,7 @@ def scrape_akwam_site():
                 break
 
         browser.close()
-        print("\n🎉 تم الانتهاء من سحب كل محتوى الموقع وحفظه في قاعدة البيانات بنجاح تام!")
+        print("\n🎉 تم الانتهاء من فحص وتحديث جميع محتوى الموقع في قاعدة البيانات بنجاح تام!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
