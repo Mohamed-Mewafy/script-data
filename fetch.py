@@ -278,19 +278,23 @@ def process_series_item(page, item_page_url, episode_index=1):
         print(f"    ⚠️ صفحة غير صالحة، تم التخطّي.")
         return
 
-    # استخراج رقم الحلقة بدقة تامة (بالبحث المباشر أو الاعتماد على الترتيب التصاعدي في القائمة لتجنب تكرار "الحلقة 1")
+    # الاعتماد الأساسي على مؤشر الحلقة التصاعدي لضمان عدم تكرار نفس رقم الحلقة
     episode_title = f"الحلقة {episode_index}"
     
-    # محاولة قراءة الرقم الفعلي من نص العنوان الداخلي إن وجد بشكل صريح
-    match_ep_num = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', raw_page_title)
-    if match_ep_num:
-        extracted_num = match_ep_num.group(1)
-        # إذا وجدنا رقماً حقيقياً داخل العنوان غير الواحد المتكرر أو لضمان الدقة
-        episode_title = f"الحلقة {extracted_num}"
+    try:
+        page_h1 = page.evaluate("""() => {
+            const h1 = document.querySelector('h1, h2, .episode-title, .title');
+            return h1 ? h1.innerText.trim() : "";
+        }""")
+        if page_h1:
+            match_num = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', page_h1)
+            if match_num:
+                episode_title = f"الحلقة {match_num.group(1)}"
+    except Exception:
+        pass
 
     print(f"    📺 تم العثور على حلقة: {episode_title}")
 
-    # استخراج اسم المسلسل الحقيقي بدقة من داخل عناصر الصفحة
     series_name = ""
     try:
         series_name = page.evaluate("""() => {
@@ -353,7 +357,7 @@ def process_series_item(page, item_page_url, episode_index=1):
     try:
         existing_ep = supabase.table("episodes_cima").select("id").eq("title", episode_title).eq("series_id", series_id).execute()
         if existing_ep.data:
-            print(f"    ⏭️ هذه الحلقة موجودة مسبقاً ومتربطة بالمسلسل. تم التخطّي.")
+            print(f"    ⏭️ هذه الحلقة ({episode_title}) موجودة مسبقاً ومتربطة بالمسلسل. تم التخطّي.")
             return
     except Exception:
         pass
