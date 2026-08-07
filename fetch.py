@@ -93,14 +93,11 @@ def fetch_download_links_only(page, item_page_url):
         page.goto(download_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
         
-        # استخراج جميع الروابط المرשطة بأزرار التحميل أو الـ Links داخل صفحة التحميل في أكوام
         links = page.evaluate("""() => {
             const anchors = Array.from(document.querySelectorAll('a[href]'));
             return anchors.map(a => a.href).filter(h => {
                 if (!h) return false;
-                // استبعاد رابط الصفحة نفسها أو الروابط الرئيسية
                 if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
-                // التقاط أي رابط يحتوي على مسارات التحميل أو الملفات أو الـ Redirects الخارجية
                 return h.includes('download') || 
                        h.includes('link') || 
                        h.includes('file') || 
@@ -108,7 +105,7 @@ def fetch_download_links_only(page, item_page_url):
                        h.includes('server') ||
                        h.includes('direct') ||
                        h.includes('get') ||
-                       !h.includes('akwams.org'); // الروابط الخارجية للتحميل مثل السيرفرات المباشرة
+                       !h.includes('akwams.org');
             });
         }""")
         
@@ -134,7 +131,7 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
         
-        # استهداف جميع أزرار وعناصر السيرفرات المتاحة في صفحة المشاهدة
+        # استهداف الأزرار والقوائم المسؤولة عن تبديل السيرفرات في أكوام
         buttons = page.locator('.servers-list button, .servers-list li, .watch-servers button, div[class*="server"] button, ul.servers li, .servers-items span, .server-item, .btn').all()
         
         if not buttons:
@@ -198,11 +195,12 @@ def process_movie_item(page, item_page_url, current_cat_url):
         existing_downloads = existing_direct_links.get("download_links", [])
         existing_streaming = existing_direct_links.get("streaming_links", [])
 
+        # التحقق: لو روابط التحميل فارغة أو روابط المشاهدة فارغة أو رابط واحد فقط
         is_downloads_empty = not existing_downloads or len(existing_downloads) == 0
-        is_streaming_empty = not existing_streaming or len(existing_streaming) == 0
+        is_streaming_empty = not existing_streaming or len(existing_streaming) <= 1
 
         if not is_downloads_empty and not is_streaming_empty:
-            print(f"    ⏭️ الفيلم موجود وبعمل كامل روابط التحميل والمشاهدة. تم التخطّي.")
+            print(f"    ⏭️ الفيلم موجود ولديه روابط كاملة (مشاهدة متعددة وتحميل). تم التخطّي.")
             return
 
         updated_needed = False
@@ -216,9 +214,9 @@ def process_movie_item(page, item_page_url, current_cat_url):
                 updated_needed = True
 
         if is_streaming_empty:
-            print(f"    ⚠️ روابط المشاهدة (streaming_links) فارغة. جاري الضغط على السيرفرات وسحبها...")
+            print(f"    ⚠️ روابط المشاهدة ناقصة أو تحتوي على رابط واحد. جاري إعادة فحص وسحب السيرفرات...")
             extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
-            if extracted_streaming_links:
+            if extracted_streaming_links and len(extracted_streaming_links) > len(existing_streaming):
                 existing_direct_links["streaming_links"] = extracted_streaming_links
                 updates_payload["watch_url"] = extracted_streaming_links[0]
                 updated_needed = True
@@ -227,11 +225,11 @@ def process_movie_item(page, item_page_url, current_cat_url):
             updates_payload["direct_links"] = existing_direct_links
             try:
                 supabase.table("movies_cima").update(updates_payload).eq("title", title).execute()
-                print(f"    🔄 [تم تحديث الروابط الناقصة بنجاح للفيلم]: {title}")
+                print(f"    🔄 [تم تحديث وإثراء الروابط بنجاح للفيلم]: {title}")
             except Exception as e:
                 print(f"    ❌ خطأ أثناء تحديث الروابط لـ ({title}): {e}")
         else:
-            print(f"    ℹ️ لم يتم العثور على روابط جديدة لإضافتها لهذا الفيلم.")
+            print(f"    ℹ️ لم يتم العثور على روابط جديدة إضافية لهذا الفيلم.")
             
     else:
         print(f"    🆕 الفيلم غير موجود. جاري سحب روابط المشاهدة والتحميل وحفظه...")
