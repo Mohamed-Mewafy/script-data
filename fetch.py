@@ -29,6 +29,28 @@ def clean_title(raw_title):
     title = title.split("|")[0].split("-")[0]
     return clean_text(title)
 
+def extract_season_and_episode(text):
+    season_num = 1
+    episode_num = 1
+    
+    # البحث عن رقم الموسم
+    season_match = re.search(r'(?:الموسم|Season)\s*(\d+)', text, re.IGNORECASE)
+    if season_match:
+        try:
+            season_num = int(season_match.group(1))
+        except Exception:
+            pass
+            
+    # البحث عن رقم الحلقة
+    episode_match = re.search(r'(?:الحلقة|Episode)\s*(\d+)', text, re.IGNORECASE)
+    if episode_match:
+        try:
+            episode_num = int(episode_match.group(1))
+        except Exception:
+            pass
+            
+    return season_num, episode_num
+
 def shorten_link_via_shrinkme(original_url):
     if not original_url:
         return original_url
@@ -278,27 +300,7 @@ def process_series_item(page, item_page_url, episode_index=1):
         print(f"    ⚠️ صفحة غير صالحة، تم التخطّي.")
         return
 
-    # جلب عنوان الحلقة تماماً كما هو ظاهر في الموقع دون أي قص أو تعديل
-    episode_title = ""
-    try:
-        page_h1 = page.evaluate("""() => {
-            const h1 = document.querySelector('h1, h2, .episode-title, .title');
-            return h1 ? h1.innerText.trim() : "";
-        }""")
-        if page_h1 and len(page_h1) > 2:
-            episode_title = page_h1
-    except Exception:
-        pass
-
-    if not episode_title:
-        episode_title = raw_page_title
-
-    episode_title = clean_text(episode_title)
-    if not episode_title:
-        episode_title = f"الحلقة {episode_index}"
-
-    print(f"    📺 عنوان الحلقة المُستخرج (كما هو): {episode_title}")
-
+    # استخراج اسم المسلسل
     series_name = ""
     try:
         series_name = page.evaluate("""() => {
@@ -320,7 +322,14 @@ def process_series_item(page, item_page_url, episode_index=1):
     if not series_name or len(series_name) < 2:
         series_name = "Fightland"
 
-    print(f"    📌 اسم المسلسل المُستخرج للربط: {series_name}")
+    # استخراج رقم الموسم ورقم الحلقة من العنوان الأصلي أو عنوان الصفحة
+    season_number, episode_number = extract_season_and_episode(raw_page_title)
+    if episode_number == 1 and episode_index > 1:
+        episode_number = episode_index
+
+    episode_title = f"الحلقة {episode_number}"
+
+    print(f"    📺 اسم المسلسل: {series_name} | الموسم: {season_number} | الحلقة: {episode_number}")
 
     series_id = None
     try:
@@ -359,9 +368,9 @@ def process_series_item(page, item_page_url, episode_index=1):
         return
 
     try:
-        existing_ep = supabase.table("episodes_cima").select("id").eq("title", episode_title).eq("series_id", series_id).execute()
+        existing_ep = supabase.table("episodes_cima").select("id").eq("series_id", series_id).eq("season_number", season_number).eq("episode_number", episode_number).execute()
         if existing_ep.data:
-            print(f"    ⏭️ هذه الحلقة موجودة مسبقاً بنفس العنوان. تم التخطّي.")
+            print(f"    ⏭️ هذه الحلقة موجودة مسبقاً بنفس رقم الموسم والحلقة. تم التخطّي.")
             return
     except Exception:
         pass
@@ -378,15 +387,17 @@ def process_series_item(page, item_page_url, episode_index=1):
     episode_data = {
         "series_id": series_id,
         "title": episode_title,
+        "season_number": season_number,
+        "episode_number": episode_number,
         "watch_url": final_watch_url,
         "direct_links": direct_links_json
     }
 
     try:
         supabase.table("episodes_cima").insert(episode_data).execute()
-        print(f"    ✅ [تم حفظ الحلقة وربطها بالمسلسل ({series_name}) بنجاح]: {episode_title}")
+        print(f"    ✅ [تم حفظ الحلقة بنجاح]: موسم {season_number} - حلقة {episode_number}")
     except Exception as e:
-        print(f"    ❌ خطأ أثناء حفظ الحلقة ({episode_title}): {e}")
+        print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
 
 def scrape_section(page, base_category_url, section_type):
     print(f"\n🚀 بدء سحب القسم من الرابط: {base_category_url}")
