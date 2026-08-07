@@ -278,7 +278,14 @@ def process_series_item(page, item_page_url):
         print(f"    ⚠️ صفحة غير صالحة، تم التخطّي.")
         return
 
-    episode_title = clean_text(raw_page_title.split("|")[0].split("-")[0])
+    # استخراج رقم الحلقة الصحيح بدقة من عنوان الصفحة
+    episode_title = "الحلقة"
+    ep_match = re.search(r'(الحلقة\s+\d+|الموسم\s+\d+\s+الحلقة\s+\d+|حلقة\s+\d+)', raw_page_title)
+    if ep_match:
+        episode_title = ep_match.group(0)
+    else:
+        episode_title = clean_text(raw_page_title.split("|")[0].split("-")[0])
+
     print(f"    📺 تم العثور على حلقة: {episode_title}")
 
     # استخراج اسم المسلسل الحقيقي بدقة من داخل عناصر الصفحة
