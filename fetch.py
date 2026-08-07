@@ -157,15 +157,13 @@ def extract_series_and_episode_info(full_title):
     return series_title if series_title else full_title, season_num, ep_num
 
 # -------------------------------------------------------------
-# 📥 دالة سحب روابط التحميل المباشرة (مع التحقق من رابط الحلقة)
+# 📥 دالة سحب روابط التحميل المباشرة
 # -------------------------------------------------------------
 def fetch_download_links_only(page, item_page_url, max_retries=2):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
     
-    # منع محاولة إضافة /download إذا كنا نقف على الصفحة الرئيسية للمسلسل/الأنمي (التي تحتوي على /series/)
     if "/series/" in clean_base_url and not any(x in clean_base_url for x in ["episode", "الحلقة", "movie"]):
-        # إذا لم تكن صفحة حلقة فرعية، نتخطي محاولة جلب التحميل بالطريقة المباشرة لتجنب إعادة التوجيه
         return []
 
     if clean_base_url.endswith('/watch'):
@@ -179,7 +177,6 @@ def fetch_download_links_only(page, item_page_url, max_retries=2):
         try:
             page.goto(download_page_url, wait_until="domcontentloaded", timeout=20000)
             
-            # التحقق مما إذا تم إعادة توجيهنا للصفحة الرئيسية أو صفحة خطأ
             if page.url.rstrip('/') == "https://akwams.org" or "/series/" in page.url and "episode" not in page.url:
                 break
 
@@ -338,7 +335,6 @@ def scrape_akwam_item_details(page, item_page_url):
 
     final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
     
-    # استدعاء دالة الروابط مع التأكد من أن الرابط يخص حلقة فعلية
     extracted_download_links = []
     if "الحلقة" in title or "episode" in item_page_url.lower():
         extracted_download_links = fetch_download_links_only(page, item_page_url)
@@ -506,9 +502,6 @@ def scrape_akwam_site():
             "https://akwams.org/category/movies/افلام-هندية",
             "https://akwams.org/category/movies/افلام-اسيوية",
             "https://akwams.org/category/movies/افلام-انمي",
-           # "https://akwams.org/category/series/مسلسلات-اجنبي",
-           # "https://akwams.org/category/series/مسلسلات-تركية/page/13",
-            #"https://akwams.org/category/series/مسلسلات-انمي"
         ]
 
         for cat_url in target_categories:
@@ -535,27 +528,19 @@ def scrape_akwam_site():
                         }""")
                         print(f"📌 إجمالي عدد الصفحات لهذا القسم: {max_pages}")
 
+                    # 🛠️ التعديل هنا: سحب روابط الأفلام مباشرة باستخدام الكلاس a.box
                     item_cards = page.evaluate("""() => {
-                        return Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
-                            if (!h || !h.includes('akwams.org')) return false;
-                            if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/user/')) return false;
-                            if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
-                            return h.split('/').length >= 4;
-                        });
+                        const cards = document.querySelectorAll('a.box');
+                        return Array.from(cards).map(a => a.href).filter(Boolean);
                     }""")
                     
                     item_links = list(set(item_cards))
-                    print(f"🔗 عُثر على {len(item_links)} رابط في هذه الصفحة.")
+                    print(f"🔗 عُثر على {len(item_links)} فيلم/مسلسل في هذه الصفحة.")
                     
                     for index, link in enumerate(item_links, 1):
                         if not is_valid_link(link):
                             continue
                         
-                        # تصفية الروابط بحيث يتم التركيز فقط على صفحات الحلقات والأفلام (تخطي الصفحات الرئيسية للمسلسلات التي لا تحتوي على حلقات مباشرة)
-                        if "/series/" in link and "episode" not in link.lower() and "الحلقة" not in link:
-                            # هذه صفحة رئيسية للمسلسل/الأنمي، فلن نتخطاها كلياً لو كنا نريد تخزين تفاصيل المسلسل نفسه، ولكن لن نحاول جلب روابط تحميل منها
-                            pass
-
                         print(f"    ⏳ فحص العنصر ({index}/{len(item_links)})...")
                         result = scrape_akwam_item_details(page, link)
                         if result:
