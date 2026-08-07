@@ -279,30 +279,46 @@ def process_series_item(page, item_page_url):
         return
 
     episode_title = clean_text(raw_page_title.split("|")[0].split("-")[0])
-    print(f"    📺 تم العثور على حلقة/موسم: {episode_title}")
+    print(f"    📺 تم العثور على حلقة: {episode_title}")
 
-    # استخراج اسم المسلسل الرئيسي (مثال: محاولة استخراجه من العنوان أو استخدام اسم افتراضي)
-    # عادة عناوين الحلقات في اكوام تكون: "مسلسل اسم_المسلسل الموسم الأول الحلقة X"
-    series_name_clean = raw_page_title
-    for word in ["الموسم", "الحلقة", "مترجم", "مدبلج", "مشاهدة", "مسلسل", "اكوام", "Akwam"]:
-        series_name_clean = series_name_clean.split(word)[0]
-    series_name = clean_text(series_name_clean)
+    # استخراج اسم المسلسل بدقة عن طريق قص الكلمات المفتاحية الخاصة بالمواسم والحلقات
+    temp_name = raw_page_title
+    for keyword in ["الموسم", "الحلقة", "مترجم", "مدبلج", "مشاهدة", "مسلسل", "اكوام", "Akwam"]:
+        if keyword in temp_name:
+            temp_name = temp_name.split(keyword)[0]
+    
+    series_name = clean_text(temp_name)
     if not series_name or len(series_name) < 2:
         series_name = "مسلسل أجنبي"
 
-    # 1. التحقق أو إدخال المسلسل في جدول tv_series
+    # 1. البحث عن المسلسل في جدول tv_series أو إنشائه إذا لم يكن موجوداً
     series_id = None
     try:
-        existing_series = supabase.table("tv_series").select("id").eq("title", series_name).execute()
+        # البحث بالاسم المطابق تماماً
+        existing_series = supabase.table("tv_series").select("id, title").ilike("title", series_name).execute()
         if existing_series.data:
             series_id = existing_series.data[0]["id"]
+            series_name = existing_series.data[0]["title"] # استخدام الاسم المخزن مسبقاً لتوحيد الربط
         else:
-            # تجهيز بيانات المسلسل الأساسية
+            # إذا لم يوجد، نقوم بإنشائه مرة واحدة فقط
             poster = get_tmdb_poster(series_name)
+            
+            # محاولة جلب القصة ووصف المسلسل إن أمكن من الصفحة
+            description = "غير متوفر"
+            try:
+                desc_text = page.evaluate("""() => {
+                    const el = document.querySelector('.story, .text-white, article p');
+                    return el ? el.innerText.trim() : "غير متوفر";
+                }""")
+                if desc_text and len(desc_text) > 5:
+                    description = desc_text
+            except Exception:
+                pass
+
             new_series_data = {
                 "title": series_name,
                 "poster_url": poster,
-                "description": "مسلسل أجنبي تم سحبه تلقائياً",
+                "description": description,
                 "category_type": "مسلسلات اجنبي"
             }
             res = supabase.table("tv_series").insert(new_series_data).execute()
@@ -316,11 +332,11 @@ def process_series_item(page, item_page_url):
         print(f"    ❌ لم يتم الحصول على معرف المسلسل (series_id)، تم تخطي الحلقة.")
         return
 
-    # 2. فحص هل الحلقة موجودة مسبقاً في episodes_cima
+    # 2. فحص هل هذه الحلقة محددة موجودة مسبقاً تحت نفس المسلسل
     try:
         existing_ep = supabase.table("episodes_cima").select("id").eq("title", episode_title).eq("series_id", series_id).execute()
         if existing_ep.data:
-            print(f"    ⏭️ الحلقة موجودة مسبقاً تحت هذا المسلسل. تم التخطّي.")
+            print(f"    ⏭️ هذه الحلقة موجودة مسبقاً ومتربطة بالمسلسل. تم التخطّي.")
             return
     except Exception:
         pass
@@ -344,7 +360,7 @@ def process_series_item(page, item_page_url):
 
     try:
         supabase.table("episodes_cima").insert(episode_data).execute()
-        print(f"    ✅ [تم حفظ الحلقة وربطها بالمسلسل بنجاح]: {episode_title}")
+        print(f"    ✅ [تم حفظ الحلقة وربطها بالمسلسل ({series_name}) بنجاح]: {episode_title}")
     except Exception as e:
         print(f"    ❌ خطأ أثناء حفظ الحلقة ({episode_title}): {e}")
 
