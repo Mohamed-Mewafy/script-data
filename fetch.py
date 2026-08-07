@@ -91,66 +91,78 @@ def fetch_download_links_only(page, item_page_url):
 
     try:
         page.goto(download_page_url, wait_until="domcontentloaded", timeout=15000)
+        time.sleep(2)
+        # البحث الشامل عن الروابط داخل صفحة التحميل بما في ذلك روابط الجودات المختلفة
         links = page.evaluate("""() => {
             const els = Array.from(document.querySelectorAll('a[href]'));
-            return els.map(el => el.href).filter(h => h.includes('download') || h.includes('link') || h.includes('file') || h.includes('niramirus'));
+            return els.map(el => el.href).filter(h => {
+                return h && (
+                    h.includes('download') || 
+                    h.includes('link') || 
+                    h.includes('file') || 
+                    h.includes('niramirus') || 
+                    h.includes('server') ||
+                    h.includes('direct')
+                );
+            });
         }""")
         for link in links:
             if link and link != download_page_url and link not in raw_download_links:
                 raw_download_links.append(link)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"    ⚠️ خطأ أثناء سحب روابط التحميل: {e}")
 
     shortened_download_links = []
     for raw_link in raw_download_links:
         short_link = shorten_link_via_shrinkme(raw_link)
         if short_link:
-            shortened_download_links.append(short_link)
-    return shortened_download_links
+            shortened_download_links.appends(short_link) if hasattr(shortened_download_links, 'appends') else shortened_download_links.append(short_link)
+    return list(set(shortened_download_links))
 
 def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = []
     try:
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
-        time.sleep(1)
+        time.sleep(2)
         
-        # العثور على أزرار السيرفرات والضغط عليها واحداً تلو الآخر
-        server_buttons = page.locator('button, .server-item, .btn-server, div[class*="server"], ul li').all()
+        # استهداف جميع أزرار وعناصر السيرفرات المتاحة في صفحة المشاهدة لأكوام بدقة عالية
+        buttons = page.locator('.servers-list button, .servers-list li, .watch-servers button, div[class*="server"] button, ul.servers li, .servers-items span, .server-item').all()
         
-        # البدء بالضغط المباشر على الأزرار التي توجد داخل صفحة المشاهدة
-        # نحدد عناصر تبديل السيرفرات بدقة بناءً على شكل أقسام أكوام
-        buttons = page.locator('text=/سيرفر/').all()
         if not buttons:
-            buttons = page.locator('.servers-list button, .servers-list div, .watch-servers button').all()
+            # محاولة بديلة عامة للأزرار في حال اختلاف الكلاسات
+            buttons = page.locator('button, .btn').all()
 
+        # الضغط على كل سيرفر وتجميع روابط الـ Iframes الناتجة
         for btn in buttons:
             try:
-                btn.click(timeout=2000)
-                time.sleep(1) # إعطاء فرصة للـ iframe للتحميل والتغيير
+                if btn.is_visible():
+                    btn.click(timeout=2000)
+                    time.sleep(1.5) # الانتظار لتحميل مصدر المشاهدة الجديد داخل الـ iframe
             except Exception:
                 pass
             
-            # جمع الروابط من الإطارات الحالية بعد كل ضغطة
+            # فحص الإطارات الحالية وجلب الروابط الخارجية (غير التابعة لأكوام)
             for frame in page.frames:
                 f_url = frame.url
-                if f_url and "akwams.org" not in f_url and f_url not in extracted_streaming_links:
-                    extracted_streaming_links.append(f_url)
-                    
-        # جلب أي iframe ظاهري أو مصدر فيديو حالي في الصفحة الرئيسية أيضاً
+                if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
+                    if f_url not in extracted_streaming_links:
+                        extracted_streaming_links.append(f_url)
+                        
+        # فحص إضافي لو لم يتم التقاط روابط عبر الضغط
         if not extracted_streaming_links:
             for frame in page.frames:
                 f_url = frame.url
-                if f_url and "akwams.org" not in f_url:
-                    extracted_streaming_links.append(f_url)
-                    
+                if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
+                    if f_url not in extracted_streaming_links:
+                        extracted_streaming_links.append(f_url)
+                        
     except Exception as e:
         print(f"    ⚠️ خطأ أثناء سحب روابط المشاهدة بالتفليش: {e}")
         
     return list(set(extracted_streaming_links))
 
 def process_movie_item(page, item_page_url, current_cat_url):
-   # print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
@@ -171,7 +183,6 @@ def process_movie_item(page, item_page_url, current_cat_url):
 
     print(f"    🎬 تم العثور على فيلم: {title}")
 
-    # التحقق هل الفيلم موجود مسبقاً في قاعدة البيانات؟
     existing = supabase.table("movies_cima").select("id, direct_links, watch_url").eq("title", title).execute()
 
     if existing.data:
@@ -186,7 +197,6 @@ def process_movie_item(page, item_page_url, current_cat_url):
         is_downloads_empty = not existing_downloads or len(existing_downloads) == 0
         is_streaming_empty = not existing_streaming or len(existing_streaming) == 0
 
-        # لو الاتنين موجودين ومش فاضيين، نتخطى الفيلم تماماً
         if not is_downloads_empty and not is_streaming_empty:
             print(f"    ⏭️ الفيلم موجود وبعمل كامل روابط التحميل والمشاهدة. تم التخطّي.")
             return
@@ -194,7 +204,6 @@ def process_movie_item(page, item_page_url, current_cat_url):
         updated_needed = False
         updates_payload = {}
 
-        # لو روابط التحميل فاضية، نسحبها ونحدثها
         if is_downloads_empty:
             print(f"    ⚠️ روابط التحميل فارغة. جاري سحبها...")
             extracted_download_links = fetch_download_links_only(page, item_page_url)
@@ -202,7 +211,6 @@ def process_movie_item(page, item_page_url, current_cat_url):
                 existing_direct_links["download_links"] = extracted_download_links
                 updated_needed = True
 
-        # لو روابط المشاهدة فاضية، نسحبها بالضغط على السيرفرات ونحدثها
         if is_streaming_empty:
             print(f"    ⚠️ روابط المشاهدة (streaming_links) فارغة. جاري الضغط على السيرفرات وسحبها...")
             extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
@@ -222,7 +230,6 @@ def process_movie_item(page, item_page_url, current_cat_url):
             print(f"    ℹ️ لم يتم العثور على روابط جديدة لإضافتها لهذا الفيلم.")
             
     else:
-        # الفيلم غير موجود تماماً، نسحب كل شيء ونحفظه جديداً
         print(f"    🆕 الفيلم غير موجود. جاري سحب روابط المشاهدة والتحميل وحفظه...")
         
         extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
