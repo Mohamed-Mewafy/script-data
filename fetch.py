@@ -29,6 +29,16 @@ def clean_title(raw_title):
     title = title.split("|")[0].split("-")[0]
     return clean_text(title)
 
+# دالة جديدة مخصصة لاستخراج اسم المسلسل بدقة
+def extract_series_name_from_title(raw_title):
+    if not raw_title:
+        return ""
+    # إزالة الكلمات الافتتاحية
+    name = re.sub(r'^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج)?\s*', '', raw_title).strip()
+    # قص النص عند بداية ذكر الموسم، الحلقة، أو الكلمات الزائدة
+    name = re.sub(r'\s*(الموسم|الحلقة|مترجم|مدبلج|اكوام|Akwam|-|\|).*', '', name, flags=re.IGNORECASE).strip()
+    return clean_text(name)
+
 def extract_season_and_episode(text):
     season_num = 1
     episode_num = 1
@@ -259,32 +269,16 @@ def process_series_item(page, item_page_url, episode_index=1):
     if not raw_page_title or "الصفحة الرئيسية" in raw_page_title or "تسجيل الدخول" in raw_page_title:
         return
 
-    series_name = ""
-    try:
-        series_name = page.evaluate("""() => {
-            const breadcrumb = document.querySelector('ul.breadcrumb, .series-title, h1 a, .entry-title a');
-            if (breadcrumb) return breadcrumb.innerText.trim();
-            const headerEl = document.querySelector('h1, h2');
-            return headerEl ? headerEl.innerText.trim() : "";
-        }""")
-    except Exception:
-        pass
+    # استخدام الطريقة الجديدة لاستخراج اسم المسلسل
+    series_name = extract_series_name_from_title(raw_page_title)
 
+    # إذا فشل الاستخراج، لا تقم بوضع اسم افتراضي يفسد قاعدة البيانات بل تخطى الرابط
     if not series_name or len(series_name) < 2:
-        temp_name = raw_page_title
-        for keyword in ["الموسم", "الحلقة", "مترجم", "مدبلج", "مشاهدة", "مسلسل", "اكوام", "Akwam", "|", "-"]:
-            if keyword in temp_name:
-                temp_name = temp_name.split(keyword)[0]
-        series_name = clean_text(temp_name)
-
-    if not series_name or len(series_name) < 2:
-        series_name = "Fightland"
+        print(f"    ⚠️ تعذر استخراج اسم المسلسل من الرابط. سيتم تخطي الرابط: {item_page_url}")
+        return
 
     season_number, episode_number = extract_season_and_episode(raw_page_title)
-    if episode_number == 1 and episode_index > 1:
-        episode_number = episode_index
 
-    # 🛑 فحص سريع للتخطي لو الحلقة مسجلة مسبقاً لمنع فتح السيرفرات وإهدار الوقت
     try:
         existing_series = supabase.table("tv_series").select("id").ilike("title", f"%{series_name}%").execute()
         if existing_series.data:
@@ -349,7 +343,6 @@ def scrape_section(page, base_category_url, section_type):
     page_number = 1
     global_processed_links = set()
     
-    # حلقة تكرارية مستمرة (إلى ما لا نهاية) حتى يصل الموقع لخطأ 404 أو تنتهي الصفحات
     while True:
         current_page_url = f"{base_category_url}/" if page_number == 1 else f"{base_category_url}/page/{page_number}/"
         print(f"\n📂 فحص وتثبيت روابط الصفحة [{page_number}] | الرابط: {current_page_url}")
@@ -362,7 +355,6 @@ def scrape_section(page, base_category_url, section_type):
 
             time.sleep(2)
             
-            # تثبيت الروابط في الذاكرة لتجنب تغير محتوى الصفحة الديناميكي أثناء المعالجة
             page_links = page.evaluate("""() => {
                 const anchors = Array.from(document.querySelectorAll('a[href]'));
                 return anchors.map(a => a.href).filter(h => {
@@ -411,10 +403,7 @@ def scrape_akwam_site():
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
         page = context.new_page()
         
-        # سحب مسلسلات أجنبي إلى ما لا نهاية
         scrape_section(page, "https://akwams.org/category/مسلسلات-اجنبي", "series")
-        
-        # سحب أفلام أجنبي إلى ما لا نهاية
         scrape_section(page, "https://akwams.org/category/movies", "movies")
 
         browser.close()
