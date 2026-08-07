@@ -127,31 +127,37 @@ def fetch_download_links_only(page, item_page_url):
 def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = []
+    
     try:
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
-        time.sleep(2)
+        time.sleep(3)
         
-        # استهداف الأزرار والقوائم المسؤولة عن تبديل السيرفرات في أكوام
-        buttons = page.locator('.servers-list button, .servers-list li, .watch-servers button, div[class*="server"] button, ul.servers li, .servers-items span, .server-item, .btn').all()
+        # استهداف أزرار السيرفرات بناءً على محتوى النص (مثل سيرفر 1، سيرفر 2، إلخ) أو الأزرار المتاحة
+        server_buttons = page.locator('button:has-text("سيرفر"), a:has-text("سيرفر"), .servers-list button, .servers-list li, div[class*="server"] button').all()
         
-        if not buttons:
-            buttons = page.locator('button').all()
+        if not server_buttons:
+            server_buttons = page.locator('button').all()
 
-        for btn in buttons:
+        print(f"    🔍 تم العثور على {len(server_buttons)} زر سيرفر للضغط عليها...")
+
+        for btn in server_buttons:
             try:
                 if btn.is_visible():
                     btn.click(timeout=2000)
                     time.sleep(1.5)
+                    
+                    # استخراج روابط الـ iframe أو الـ frames بعد الضغط
+                    frame_url = page.evaluate("""() => {
+                        const iframe = document.querySelector('iframe');
+                        return iframe ? iframe.src : null;
+                    }""")
+                    
+                    if frame_url and frame_url not in extracted_streaming_links and "akwams" not in frame_url and "about:blank" not in frame_url:
+                        extracted_streaming_links.append(frame_url)
             except Exception:
                 pass
             
-            for frame in page.frames:
-                f_url = frame.url
-                if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
-                    if f_url not in extracted_streaming_links:
-                        extracted_streaming_links.append(f_url)
-                        
-        if not extracted_streaming_links:
+            # فحص إضافي عبر الـ frames المتاحة في الصفحة
             for frame in page.frames:
                 f_url = frame.url
                 if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
@@ -195,7 +201,7 @@ def process_movie_item(page, item_page_url, current_cat_url):
         existing_downloads = existing_direct_links.get("download_links", [])
         existing_streaming = existing_direct_links.get("streaming_links", [])
 
-        # التحقق: لو روابط التحميل فارغة أو روابط المشاهدة فارغة أو رابط واحد فقط
+        # إعادة الفحص لو روابط التحميل فارغة أو روابط المشاهدة فارغة / رابط واحد فقط
         is_downloads_empty = not existing_downloads or len(existing_downloads) == 0
         is_streaming_empty = not existing_streaming or len(existing_streaming) <= 1
 
