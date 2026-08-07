@@ -43,7 +43,7 @@ def extract_season_and_episode(text):
     if not text:
         return season_num, episode_num
 
-    # 1. صيغة S01E01
+    # 1. البحث عن صيغة S01E01 الشهيرة
     s_e_match = re.search(r'S(\d+)\s*E(\d+)', text, re.IGNORECASE)
     if s_e_match:
         return int(s_e_match.group(1)), int(s_e_match.group(2))
@@ -61,7 +61,7 @@ def extract_season_and_episode(text):
         "العاشر": 10, "العاشرة": 10
     }
 
-    # 2. استخراج الموسم
+    # 2. استخراج رقم الموسم
     season_match = re.search(r'(?:الموسم|Season)\s*(?:الـ|ال)?\s*(\d+)', text, re.IGNORECASE)
     if season_match:
         season_num = int(season_match.group(1))
@@ -70,7 +70,7 @@ def extract_season_and_episode(text):
         if season_word_match and season_word_match.group(1) in arabic_numbers:
             season_num = arabic_numbers[season_word_match.group(1)]
 
-    # 3. استخراج الحلقة
+    # 3. استخراج رقم الحلقة
     episode_match = re.search(r'(?:الحلقة|Episode)\s*(?:الـ|ال)?\s*(\d+)', text, re.IGNORECASE)
     if episode_match:
         episode_num = int(episode_match.group(1))
@@ -79,16 +79,15 @@ def extract_season_and_episode(text):
         if ep_word_match and ep_word_match.group(1) in arabic_numbers:
             episode_num = arabic_numbers[ep_word_match.group(1)]
 
-    # حماية ضد الأرقام غير المنطقية
     if season_num > 20: 
         season_num = 1
         
     return season_num, episode_num
 
 def shorten_link_via_shrinkme(original_url):
-    if not original_url: 
+    if not original_url:
         return original_url
-    if "shrinkme.io" in original_url or "shrinkme.click" in original_url: 
+    if "shrinkme.io" in original_url or "shrinkme.click" in original_url:
         return original_url
     try:
         encoded_url = urllib.parse.quote(original_url)
@@ -98,7 +97,7 @@ def shorten_link_via_shrinkme(original_url):
             data = response.json()
             if data.get("status") == "success" and data.get("shortenedUrl"):
                 return data.get("shortenedUrl")
-    except Exception: 
+    except Exception:
         pass
     return original_url
 
@@ -106,7 +105,7 @@ def get_tmdb_poster(title):
     try:
         clean_name = re.sub(r'[\d\-\_\:\,\.\(\)]', ' ', title)
         clean_name = clean_text(clean_name)
-        if not clean_name or len(clean_name) < 2: 
+        if not clean_name or len(clean_name) < 2:
             return "غير متوفر"
         query = urllib.parse.quote(clean_name)
         url = f"https://api.themoviedb.org/3/search/multi?api_key=3f4534f3c7e1451f28b49231f47d3c3d&query={query}&language=ar"
@@ -115,93 +114,121 @@ def get_tmdb_poster(title):
             data = json.loads(response.read().decode())
             results = data.get("results", [])
             for res in results:
-                if res.get("poster_path"): 
-                    return f"https://image.tmdb.org/t/p/w500{res.get('poster_path')}"
-    except Exception: 
+                poster_path = res.get("poster_path")
+                if poster_path:
+                    return f"https://image.tmdb.org/t/p/w500{poster_path}"
+    except Exception:
         pass
     return "غير متوفر"
 
 def fetch_download_links_only(page, item_page_url):
     raw_download_links = []
     download_page_url = f"{item_page_url.rstrip('/')}/download"
+
     try:
         page.goto(download_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
-        links = page.evaluate("""() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(h => h && !h.includes('akwams.org'))""")
+        
+        links = page.evaluate("""() => {
+            const anchors = Array.from(document.querySelectorAll('a[href]'));
+            return anchors.map(a => a.href).filter(h => {
+                if (!h) return false;
+                if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
+                return h.includes('download') || h.includes('link') || h.includes('file') || h.includes('server') || !h.includes('akwams.org');
+            });
+        }""")
+        
         for link in links:
-            if link and link not in raw_download_links: 
+            if link and link not in raw_download_links and not link.startswith("chrome-error://"):
                 raw_download_links.append(link)
-    except Exception: 
+    except Exception:
         pass
+
     return list(set([shorten_link_via_shrinkme(l) for l in raw_download_links]))
 
 def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
-    extracted = []
+    extracted_streaming_links = []
+    
     try:
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(3)
-        buttons = page.locator('button:has-text("سيرفر"), a:has-text("سيرفر")').all()
-        for btn in buttons:
+        
+        server_buttons = page.locator('button:has-text("سيرفر"), a:has-text("سيرفر")').all()
+        if not server_buttons:
+            server_buttons = page.locator('button').all()
+
+        for btn in server_buttons:
             try:
                 if btn.is_visible():
-                    btn.click(timeout=1000)
+                    btn.click(timeout=2000)
                     time.sleep(1)
                     frame_url = page.evaluate("() => document.querySelector('iframe')?.src")
-                    if frame_url and "akwams" not in frame_url: 
-                        extracted.append(frame_url)
-            except Exception: 
+                    if frame_url and frame_url not in extracted_streaming_links and "akwams" not in frame_url and "about:blank" not in frame_url:
+                        extracted_streaming_links.append(frame_url)
+            except Exception:
                 pass
-    except Exception: 
+            
+            for frame in page.frames:
+                f_url = frame.url
+                if f_url and "akwams.org" not in f_url and "about:blank" not in f_url:
+                    if f_url not in extracted_streaming_links:
+                        extracted_streaming_links.append(f_url)
+    except Exception:
         pass
-    return list(set(extracted))
+        
+    return list(set(extracted_streaming_links))
 
 def process_series_item(page, item_page_url):
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
-    except Exception: 
+    except Exception:
         return
     
-    title = page.title()
-    
-    # 🛑 فلترة صفحات الخطأ أو الروابط الميتة
-    if not title or "Page Not Found" in title or "404" in title:
-        print(f"⚠️ تجاهل رابط غير صالح أو صفحة غير موجودة: {item_page_url}")
+    title = ""
+    try:
+        page_title = page.title()
+        if page_title:
+            title = clean_title(page_title)
+    except Exception:
+        pass
+
+    if not title or "Page Not Found" in title or "404" in title or len(title) < 2:
         return
 
     series_name = extract_series_name_from_title(title)
     season_number, episode_number = extract_season_and_episode(title)
     
-    if not series_name or len(series_name) < 2 or series_name.lower() in ["s1e1", "الحلقة"]: 
+    if not series_name or len(series_name) < 2 or series_name.lower() in ["s1e1", "الحلقة"]:
         return
 
-    try:
-        series = supabase.table("tv_series").select("id").ilike("title", f"%{series_name}%").execute()
-        if series.data:
-            s_id = series.data[0]["id"]
-            if supabase.table("episodes_cima").select("id").eq("series_id", s_id).eq("season_number", season_number).eq("episode_number", episode_number).execute().data:
-                print(f"⏭️ تخطي (موجود مسبقاً): {series_name} S{season_number}E{episode_number}")
-                return
-    except Exception: 
-        pass
-
-    print(f"📺 معالجة: {series_name} | موسم {season_number} - حلقة {episode_number}")
-    
+    # 1. حفظ أو جلب المسلسل الأساسي
     series_id = None
-    existing = supabase.table("tv_series").select("id").ilike("title", f"%{series_name}%").execute()
-    if existing.data: 
-        series_id = existing.data[0]["id"]
+    existing_series = supabase.table("tv_series").select("id").ilike("title", f"%{series_name}%").execute()
+    
+    if existing_series.data:
+        series_id = existing_series.data[0]["id"]
     else:
+        poster = get_tmdb_poster(series_name)
         res = supabase.table("tv_series").insert({
-            "title": series_name, 
-            "poster_url": get_tmdb_poster(series_name), 
+            "title": series_name,
+            "poster_url": poster,
             "category_type": "مسلسلات اجنبي"
         }).execute()
-        if res.data: 
+        if res.data:
             series_id = res.data[0]["id"]
-    
-    if not series_id: 
+
+    if not series_id:
         return
+
+    # 2. فحص هل الحلقة موجودة مسبقاً بنفس المسلسل ورقم الموسم ورقم الحلقة لمنع التكرار تماماً
+    existing_episode = supabase.table("episodes_cima").select("id").eq("series_id", series_id).eq("season_number", season_number).eq("episode_number", episode_number).execute()
+
+    if existing_episode.data:
+        print(f"    ⏭️ تخطي (الحلقة موجودة مسبقاً): {series_name} | S{season_number}E{episode_number}")
+        return
+
+    print(f"    📺 معالجة وحفظ حلقة جديدة: {series_name} | موسم {season_number} - حلقة {episode_number}")
     
     streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
     download_links = fetch_download_links_only(page, item_page_url)
@@ -214,36 +241,68 @@ def process_series_item(page, item_page_url):
         "episode_number": episode_number,
         "watch_url": final_watch_url,
         "direct_links": {
-            "streaming_links": streaming_links, 
+            "streaming_links": streaming_links,
             "download_links": download_links
         }
     }
     
     try:
         supabase.table("episodes_cima").insert(episode_data).execute()
-        print("✅ تم الحفظ بنجاح")
+        print(f"    ✅ تم حفظ الحلقة بنجاح.")
     except Exception as e:
-        print(f"❌ خطأ أثناء الحفظ: {e}")
-
-def scrape_section(page, base_url, section_type):
-    page_num = 1
-    while True:
-        url = f"{base_url}/page/{page_num}/" if page_num > 1 else base_url
-        resp = page.goto(url)
-        if resp and resp.status == 404: 
-            break
-        links = page.evaluate("() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(h => h.includes('akwams.org/') && !h.includes('/category/'))")
-        for link in set(links):
-            if section_type == "series": 
-                process_series_item(page, link)
-        page_num += 1
+        print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
 
 def scrape_akwam_site():
+    print("🚀 بدء سكربت المسلسلات المحدث (بدون تكرار)...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        scrape_section(page, "https://akwams.org/category/مسلسلات-اجنبي", "series")
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
+        page = context.new_page()
+        
+        base_category_url = "https://akwams.org/category/مسلسلات-اجنبي"
+        page_number = 1
+        
+        while True:
+            current_page_url = f"{base_category_url}/page/{page_number}/" if page_number > 1 else base_category_url
+            print(f"\n📂 فحص الصفحة رقم [{page_number}]...")
+            
+            try:
+                response = page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
+                if response and response.status == 404:
+                    print("🏁 وصلنا لناية الصفحات.")
+                    break
+
+                time.sleep(2)
+                
+                item_links = page.evaluate("""() => {
+                    const anchors = Array.from(document.querySelectorAll('a[href]'));
+                    const links = anchors.map(a => a.href).filter(h => {
+                        if (!h || !h.includes('akwams.org')) return false;
+                        if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/')) return false;
+                        const parts = h.split('/').filter(Boolean);
+                        return parts.length >= 3;
+                    });
+                    return [...new Set(links)];
+                }""")
+                
+                if not item_links:
+                    break
+                
+                print(f"🔗 عُثر على {len(item_links)} رابط في هذه الصفحة...")
+                for index, link in enumerate(item_links, 1):
+                    print(f"\n  -- عنصر ({index}/{len(item_links)})")
+                    process_series_item(page, link)
+                
+                page_number += 1
+            except Exception as e:
+                print(f"⚠️ خطأ: {e}")
+                break
+
         browser.close()
+        print("\n🎉 تم الانتهاء بنجاح!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
