@@ -109,7 +109,7 @@ def fetch_download_links_only(page, item_page_url):
     return shortened_download_links
 
 def scrape_akwam_item_details(page, item_page_url):
-    #print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
+   # print(f"    🔍 جاري فتح صفحة الفيلم: {item_page_url}")
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
@@ -244,7 +244,7 @@ def save_movie_to_supabase(item_data, current_cat_url):
         print(f"    ❌ خطأ أثناء الحفظ في القاعدة لصالح ({title}): {e}")
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت المخصص لسحب الأفلام الحقيقية فقط...")
+    print("🚀 بدء السكربت الشامل لسحب كل صفحات الأفلام حتى النهاية...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -256,7 +256,8 @@ def scrape_akwam_site():
         base_category_url = "https://akwams.org/category/movies"
         page_number = 1
         
-        while page_number <= 3:
+        # حلقة غير محدودة (تستمر حتى تنتهي صفحات الموقع تماماً)
+        while True:
             if page_number == 1:
                 current_page_url = f"{base_category_url}/"
             else:
@@ -265,7 +266,13 @@ def scrape_akwam_site():
             print(f"\n📂 جاري فحص الصفحة رقم [{page_number}] | الرابط: {current_page_url}")
             
             try:
-                page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
+                response = page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
+                
+                # لو الموقع رجع خطأ 404 أو الصفحة مش موجودة، يبقى كده خلصنا كل الصفحات
+                if response and response.status == 404:
+                    print(f"🏁 وصلنا إلى نهاية الصفحات (خطأ 404). تم الانتهاء من سحب كافة محتوى الموقع بنجاح!")
+                    break
+
                 time.sleep(2)
                 
                 item_links = page.evaluate("""() => {
@@ -281,10 +288,10 @@ def scrape_akwam_site():
                 }""")
                 
                 if not item_links:
-                    print(f"🏁 لا توجد عناصر أخرى في الصفحة رقم [{page_number}].")
+                    print(f"🏁 لا توجد عناصر أو روابط أخرى في الصفحة رقم [{page_number}]. تم الانتهاء!")
                     break
                 
-                print(f"🔗 عُثر على {len(item_links)} رابط فيلم حقيقي في هذه الصفحة. جاري سحبها وتخزينها...")
+                print(f"🔗 عُثر على {len(item_links)} رابط فيلم في هذه الصفحة. جاري سحبها وتخزينها...")
                 
                 for index, link in enumerate(item_links, 1):
                     print(f"\n  -- فيلم ({index}/{len(item_links)})")
@@ -295,11 +302,11 @@ def scrape_akwam_site():
                 page_number += 1
                 
             except Exception as e:
-                print(f"⚠️ خطأ في الصفحة [{page_number}]: {e}")
+                print(f"⚠️ حدث خطأ أو نهاية الصفحات عند الصفحة [{page_number}]: {e}")
                 break
 
         browser.close()
-        print("\n🎉 تم الانتهاء من السحب والحفظ بنجاح تام!")
+        print("\n🎉 تم الانتهاء من سحب كل محتوى الموقع وحفظه في قاعدة البيانات بنجاح تام!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
