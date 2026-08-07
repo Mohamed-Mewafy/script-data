@@ -8,7 +8,6 @@ import requests
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
 
-# إعدادات الاتصال
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN")
@@ -37,7 +36,7 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
         page.goto(f"{item_page_url.rstrip('/')}/watch/", wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
         buttons = page.locator('button:has-text("سيرفر"), a:has-text("سيرفر")').all()
-        for btn in buttons[:5]: # نكتفي بأول 5 سيرفرات للتسريع
+        for btn in buttons[:5]:
             if btn.is_visible():
                 btn.click()
                 time.sleep(1)
@@ -55,23 +54,20 @@ def process_series_item(page, item_page_url):
     base_name = extract_series_name_from_title(title)
     s_num, e_num = extract_season_and_episode(title)
     
-    # النظام الجديد: الاسم الفريد للمسلسل يشمل الموسم
     unique_season_title = f"{base_name} - الموسم {s_num}"
 
-    # 1. البحث عن هذا الموسم في جدول المسلسلات
+    # 1. البحث عن هذا الموسم أو إضافته
     existing = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
     
     if existing.data:
         series_id = existing.data[0]["id"]
     else:
-        # إنشاء "مسلسل" جديد يمثل هذا الموسم
         new_series = supabase.table("tv_series").insert({
             "title": unique_season_title,
             "category_type": "مسلسلات اجنبي"
         }).execute()
         series_id = new_series.data[0]["id"]
 
-    # 2. حفظ الحلقة تحت الـ series_id الخاص بالموسم فقط
     print(f"    📺 جاري حفظ: {unique_season_title} | حلقة {e_num}")
     
     links = fetch_streaming_links_with_clicking(page, item_page_url)
@@ -85,8 +81,20 @@ def process_series_item(page, item_page_url):
         "direct_links": {"streaming_links": links}
     }
     
+    # 2. استخدام Insert مباشر مع التحقق لمنع الأخطاء
     try:
-        supabase.table("episodes_cima").upsert(episode_data, on_conflict="series_id,season_number,episode_number").execute()
+        # فحص هل الحلقة موجودة مسبقاً بنفس المسلسل ورقم الحلقة لتجنب التكرار برمجياً
+        check_ep = supabase.table("episodes_cima").select("id").eq("series_id", series_id).eq("season_number", s_num).eq("episode_number", e_num).execute()
+        
+        if check_ep.data:
+            # تحديث الرابط لو موجودة
+            ep_id = check_ep.data[0]["id"]
+            supabase.table("episodes_cima").update(episode_data).eq("id", ep_id).execute()
+            print(f"    🔄 تم تحديث الحلقة الحالية بنجاح.")
+        else:
+            # إضافتها لو مش موجودة
+            supabase.table("episodes_cima").insert(episode_data).execute()
+            print(f"    ✅ تم حفظ الحلقة بنجاح.")
     except Exception as e:
         print(f"    ⚠️ خطأ في الحفظ: {e}")
 
