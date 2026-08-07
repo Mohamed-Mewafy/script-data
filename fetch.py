@@ -248,7 +248,6 @@ def process_series_item(page, item_page_url, episode_index=1):
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception as e:
-        print(f"    ❌ فشل فتح صفحة الحلقة: {e}")
         return
 
     raw_page_title = ""
@@ -285,8 +284,19 @@ def process_series_item(page, item_page_url, episode_index=1):
     if episode_number == 1 and episode_index > 1:
         episode_number = episode_index
 
-    episode_title = f"الحلقة {episode_number}"
-    print(f"    📺 مسلسل: {series_name} | موسم {season_number} - حلقة {episode_number}")
+    # 🛑 فحص سريع للتخطي لو الحلقة مسجلة مسبقاً لمنع فتح السيرفرات وإهدار الوقت
+    try:
+        existing_series = supabase.table("tv_series").select("id").ilike("title", f"%{series_name}%").execute()
+        if existing_series.data:
+            s_id = existing_series.data[0]["id"]
+            existing_ep = supabase.table("episodes_cima").select("id").eq("series_id", s_id).eq("season_number", season_number).eq("episode_number", episode_number).execute()
+            if existing_ep.data:
+                print(f"    ⏭️ [تخطي سريع]: {series_name} - موسم {season_number} حلقة {episode_number} مسجل مسبقاً.")
+                return
+    except Exception:
+        pass
+
+    print(f"    📺 جاري معالجة: {series_name} | موسم {season_number} - حلقة {episode_number}")
 
     series_id = None
     try:
@@ -305,19 +315,10 @@ def process_series_item(page, item_page_url, episode_index=1):
             if res.data:
                 series_id = res.data[0]["id"]
     except Exception as e:
-        print(f"    ⚠️ خطأ في جدول tv_series: {e}")
         return
 
     if not series_id:
         return
-
-    try:
-        existing_ep = supabase.table("episodes_cima").select("id").eq("series_id", series_id).eq("season_number", season_number).eq("episode_number", episode_number).execute()
-        if existing_ep.data:
-            print(f"    ⏭️ الحلقة موجودة مسبقاً. تم التخطّي.")
-            return
-    except Exception:
-        pass
 
     extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
     final_watch_url = extracted_streaming_links[0] if extracted_streaming_links else None
@@ -330,7 +331,7 @@ def process_series_item(page, item_page_url, episode_index=1):
 
     episode_data = {
         "series_id": series_id,
-        "title": episode_title,
+        "title": f"الحلقة {episode_number}",
         "season_number": season_number,
         "episode_number": episode_number,
         "watch_url": final_watch_url,
@@ -344,51 +345,50 @@ def process_series_item(page, item_page_url, episode_index=1):
         print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
 
 def scrape_section(page, base_category_url, section_type):
-    print(f"\n🚀 بدء سحب القسم: {base_category_url}")
+    print(f"\n🚀 بدء سحب القسم بلا حدود: {base_category_url}")
     page_number = 1
-    global_processed_links = set() # ذاكرة مؤقتة لمنع تكرار الروابط نهائياً في الجلسة
+    global_processed_links = set()
     
-    while page_number <= 30: # تحديد الحد الأقصى للصفحات لمنع الدوران اللانهائي
+    # حلقة تكرارية مستمرة (إلى ما لا نهاية) حتى يصل الموقع لخطأ 404 أو تنتهي الصفحات
+    while True:
         current_page_url = f"{base_category_url}/" if page_number == 1 else f"{base_category_url}/page/{page_number}/"
-        print(f"\n📂 فحص الصفحة [{page_number}] | الرابط: {current_page_url}")
+        print(f"\n📂 فحص وتثبيت روابط الصفحة [{page_number}] | الرابط: {current_page_url}")
         
         try:
             response = page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
             if response and response.status == 404:
-                print(f"🏁 نهاية القسم (خطأ 404).")
+                print(f"🏁 وصلنا لنهاية القسم تماماً (خطأ 404).")
                 break
 
             time.sleep(2)
             
-            # استهداف الروابط الخاصة بالبوسترات/العناصر في الشبكة لتفادي الروابط العشوائية
-            item_links = page.evaluate("""() => {
-                const anchors = Array.from(document.querySelectorAll('.entry-box a, .media-box a, .item a, div.card a, a.box'));
-                if (anchors.length === 0) {
-                    // طريقة بديلة لو لم يتم العثور على الكلاسات المعتادة
-                    return Array.from(document.querySelectorAll('a[href]'))
-                        .map(a => a.href)
-                        .filter(h => h && h.includes('akwams.org') && !h.includes('/category/') && !h.includes('/page/'));
-                }
-                return anchors.map(a => a.href);
+            # تثبيت الروابط في الذاكرة لتجنب تغير محتوى الصفحة الديناميكي أثناء المعالجة
+            page_links = page.evaluate("""() => {
+                const anchors = Array.from(document.querySelectorAll('a[href]'));
+                return anchors.map(a => a.href).filter(h => {
+                    if (!h || !h.includes('akwams.org')) return false;
+                    if (h.includes('/category/') || h.includes('/page/') || h.includes('/tag/') || h.includes('/search/') || h.includes('/login') || h.includes('/recent')) return false;
+                    if (h === 'https://akwams.org/' || h === 'https://akwams.org') return false;
+                    const parts = h.split('/').filter(Boolean);
+                    return parts.length >= 3;
+                });
             }""")
             
-            # تنقية الروابط الفريدة
-            valid_links = []
-            for link in item_links:
+            current_page_items = []
+            for link in page_links:
                 if link and link not in global_processed_links:
-                    if "akwams.org" in link and not any(x in link for x in ['/category/', '/page/', '/tag/', '/search/', '/login']):
-                        valid_links.append(link)
-                        global_processed_links.add(link)
+                    global_processed_links.add(link)
+                    current_page_items.append(link)
             
-            if not valid_links:
-                print(f"⚠️ لا توجد روابط جديدة في الصفحة [{page_number}]. الانتقال للالتالي...")
+            if not current_page_items:
+                print(f"⚠️ لا توجد روابط جديدة في الصفحة [{page_number}]. الانتقال للصفحة التالية...")
                 page_number += 1
                 continue
             
-            print(f"🔗 عُثر على {len(valid_links)} عنصر جديد في هذه الصفحة.")
+            print(f"🔗 تم تثبيت {len(current_page_items)} عنصر. جاري المعالجة...")
             
-            for index, link in enumerate(valid_links, 1):
-                print(f"\n  -- عنصر ({index}/{len(valid_links)})")
+            for index, link in enumerate(current_page_items, 1):
+                print(f"\n  -- عنصر ({index}/{len(current_page_items)})")
                 if section_type == "series":
                     process_series_item(page, link, episode_index=index)
                 else:
@@ -397,12 +397,12 @@ def scrape_section(page, base_category_url, section_type):
             page_number += 1
             
         except Exception as e:
-            print(f"⚠️ خطأ في الصفحة [{page_number}]: {e}")
+            print(f"⚠️ حدث خطأ في الصفحة [{page_number}]: {e}")
             page_number += 1
             continue
 
 def scrape_akwam_site():
-    print("🚀 بدء السكربت المحدث...")
+    print("🚀 بدء تشغيل السكربت الشامل...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -411,11 +411,14 @@ def scrape_akwam_site():
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}", lambda route: route.abort())
         page = context.new_page()
         
+        # سحب مسلسلات أجنبي إلى ما لا نهاية
         scrape_section(page, "https://akwams.org/category/مسلسلات-اجنبي", "series")
+        
+        # سحب أفلام أجنبي إلى ما لا نهاية
         scrape_section(page, "https://akwams.org/category/movies", "movies")
 
         browser.close()
-        print("\n🎉 تم الانتهاء بنجاح!")
+        print("\n🎉 تم الانتهاء من سحب كافة الأقسام بنجاح!")
 
 if __name__ == "__main__":
     scrape_akwam_site()
