@@ -24,7 +24,8 @@ def clean_text(text):
     return " ".join(text.split()).strip()
 
 def normalize_series_title(raw_title):
-    name = re.sub(r'^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج)?\s*', '', raw_title).strip()
+    # تنظيف العنوان من الكلمات الزائدة في البداية
+    name = re.sub(r'^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج|حصريا|جديد)?\s*', '', raw_title).strip()
     
     season_num = 1
     s_match = re.search(r'(?:الموسم|Season)\s*(?:الـ|ال)?\s*(\d+)', name, re.IGNORECASE)
@@ -44,11 +45,14 @@ def normalize_series_title(raw_title):
                 season_num = num
                 break
 
+    # استخراج اسم المسلسل الحقيقي ومنع أخذ الكلمات الوهمية
     clean_name = re.sub(r'\s*(الموسم|Season|الاول|الأول|الثاني|الثالث|الرابع|الخامس|الحلقة|\d+|-|\||مترجم|مدبلج|اكوام|Akwam).*', '', name, flags=re.IGNORECASE).strip()
     clean_name = clean_text(clean_name)
     
-    if not clean_name:
-        clean_name = "مسلسل غير معروف"
+    # فحص إضافي للتأكد أن الاسم ليس كلمة غير مفيدة مثل "جديد" أو "مسلسل"
+    invalid_names = ["جديد", "حصريا", "مسلسل", "انمي", "برنامج", "الحلقة"]
+    if not clean_name or clean_name in invalid_names or len(clean_name) < 2:
+        return None, None, None
 
     unified_title = f"{clean_name} - الموسم {season_num}"
     return unified_title, season_num, clean_name
@@ -57,7 +61,11 @@ def normalize_movie_title(raw_title):
     name = re.sub(r'^(مشاهدة|تحميل|فيلم)?\s*', '', raw_title).strip()
     clean_name = re.sub(r'\s*(-|\||مترجم|مدبلج|اكوام|Akwam|اونلاين|بجودة).*', '', name, flags=re.IGNORECASE).strip()
     clean_name = clean_text(clean_name)
-    return clean_name if clean_name else "فيلم غير معروف"
+    
+    invalid_names = ["جديد", "حصريا", "فيلم"]
+    if not clean_name or clean_name in invalid_names or len(clean_name) < 2:
+        return None
+    return clean_name
 
 def extract_episode_number(text):
     e_match = re.search(r'(?:الحلقة|Episode)\s*(?:الـ|ال)?\s*(\d+)', text, re.IGNORECASE)
@@ -207,6 +215,9 @@ def process_item(page, item_page_url, cat_type):
     # معالجة المسلسلات
     if "مسلسلات" in cat_type:
         unique_season_title, s_num, raw_base_name = normalize_series_title(title)
+        if not unique_season_title: # تخطي السجل إذا كان العنوان غير صالح
+            return
+            
         e_num = extract_episode_number(title)
         print(f"    📺 مسلسل: {unique_season_title} | حلقة {e_num}")
 
@@ -251,9 +262,12 @@ def process_item(page, item_page_url, cat_type):
         except Exception:
             pass
 
-    # معالجة الأفلام (أجنبي وعربي)
+    # معالجة الأفلام
     elif "افلام" in cat_type or "أفلام" in cat_type:
         movie_title = normalize_movie_title(title)
+        if not movie_title: # تخطي السجل إذا كان العنوان غير صالح
+            return
+            
         print(f"    🎬 فيلم: {movie_title}")
 
         if poster == "غير متوفر" or not poster.startswith("http"):
@@ -282,7 +296,6 @@ def process_item(page, item_page_url, cat_type):
             print(f"    ❌ خطأ في حفظ الفيلم: {e}")
 
 def scrape_akwam_site():
-    # الأقسام المشمولة (مسلسلات وأفلام أجنبية وعربية)
     categories = [
         ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
         ("https://akwams.org/category/افلام-اجنبي", "افلام اجنبي"),
