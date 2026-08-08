@@ -141,62 +141,87 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = set()
 
+    # 1. التقاط الاستجابات الشبكية (AJAX Network Interception)
+    def handle_response(response):
+        try:
+            url = response.url
+            if any(ext in url for ext in ['.m3u8', 'embed', 'player', 'vidsrc', 'stream']):
+                if "akwams" not in url and not url.endswith('.js') and not url.endswith('.css'):
+                    extracted_streaming_links.add(url)
+            
+            if "json" in response.headers.get("content-type", ""):
+                try:
+                    data = response.json()
+                    data_str = json.dumps(data)
+                    found_urls = re.findall(r'https?://[^\s"\'\\]+', data_str)
+                    for u in found_urls:
+                        if "akwams" not in u and any(k in u for k in ['embed', 'player', 'm3u8', 'vidsrc', 'stream']):
+                            extracted_streaming_links.add(u)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    page.on("response", handle_response)
+
     try:
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
-        
-        # 1. فحص الإطارات المباشرة
-        iframes = page.locator('iframe').all()
-        for iframe in iframes:
+
+        # 2. البحث والضغط المباشر عبر DOM JavaScript على أزرار السيرفرات
+        server_links = page.evaluate("""() => {
+            const elements = Array.from(document.querySelectorAll('a, button, div, span'))
+                .filter(el => {
+                    const txt = el.innerText ? el.innerText.trim() : '';
+                    return txt.includes('سيرفر') || (el.className && el.className.toString().includes('server'));
+                });
+            return elements.length;
+        }""")
+
+        for index in range(min(server_links, 15)):
             try:
-                src = iframe.get_attribute('src') or iframe.get_attribute('data-src')
-                if src and "akwams" not in src and not src.startswith("about:blank"):
-                    extracted_streaming_links.add(src)
-            except Exception:
-                pass
+                page.evaluate(f"""(idx) => {{
+                    const elements = Array.from(document.querySelectorAll('a, button, div, span'))
+                        .filter(el => {{
+                            const txt = el.innerText ? el.innerText.trim() : '';
+                            return txt.includes('سيرفر') || (el.className && el.className.toString().includes('server'));
+                        }});
+                    if (elements[idx]) {{
+                        elements[idx].click();
+                    }}
+                }}""", index)
+                
+                time.sleep(1.2)
 
-        # 2. الضغط على أزرار السيرفرات
-        server_selectors = [
-            'button:has-text("سيرفر")', 
-            'a:has-text("سيرفر")', 
-            '.servers-list button', 
-            '.servers-list a',
-            'ul.servers button',
-            'div[class*="server"] button',
-            'div[class*="server"] a'
-        ]
-        
-        server_buttons = []
-        for selector in server_selectors:
-            btns = page.locator(selector).all()
-            if btns:
-                server_buttons.extend(btns)
+                iframe_src = page.evaluate("""() => {
+                    const frame = document.querySelector('iframe');
+                    if (frame) {
+                        return frame.src || frame.getAttribute('data-src') || frame.getAttribute('data-lazy-src');
+                    }
+                    return null;
+                }""")
 
-        if not server_buttons:
-            server_buttons = page.locator('button').all()
+                if iframe_src and "akwams" not in iframe_src and not iframe_src.startswith("about:blank"):
+                    extracted_streaming_links.add(iframe_src)
 
-        for btn in server_buttons[:8]:
-            try:
-                if btn.is_visible():
-                    btn.click(timeout=1500)
-                    time.sleep(1)
-                    
-                    frame_url = page.evaluate("() => document.querySelector('iframe')?.src || document.querySelector('iframe')?.getAttribute('data-src')")
-                    if frame_url and "akwams" not in frame_url and not frame_url.startswith("about:blank"):
-                        extracted_streaming_links.add(frame_url)
             except Exception:
                 pass
 
         # 3. جلب الـ Frames بالصفحة
         for frame in page.frames:
             f_url = frame.url
-            if f_url and "akwams.org" not in f_url and "about:blank" not in f_url and not f_url.startswith("chrome-error://"):
+            if f_url and "akwams" not in f_url and "about:blank" not in f_url and not f_url.startswith("chrome-error://"):
                 extracted_streaming_links.add(f_url)
 
     except Exception:
         pass
-        
-    return list(extracted_streaming_links)
+    finally:
+        try:
+            page.remove_listener("response", handle_response)
+        except Exception:
+            pass
+
+    return [link for link in extracted_streaming_links if link and link.startswith('http')]
 
 def process_item(page, item_page_url, cat_type):
     if "مسلسلات" not in cat_type:
@@ -272,7 +297,6 @@ def process_item(page, item_page_url, cat_type):
     }
 
     try:
-        # حفظ أو تحديث بيانات المسلسل
         supabase.table("tv_series").upsert(formatted_series, on_conflict="title").execute()
         get_id = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
         if not get_id.data:
@@ -281,12 +305,12 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         return
 
-    # سحب الروابط الجديدة من الصفحة
+    # سحب الروابط بتحديثات المتانة الجديدة
     new_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
     new_download_links = fetch_download_links_only(page, item_page_url)
 
     try:
-        # 🔍 الاستعلام عن الحلقة هل هي موجودة مسبقاً أم لا؟
+        # فحص إذا كانت الحلقة موجودة في Supabase مسبقاً
         existing_ep = supabase.table("episodes_cima") \
             .select("id, watch_url, direct_links") \
             .eq("series_id", series_id) \
@@ -306,11 +330,10 @@ def process_item(page, item_page_url, cat_type):
             old_streaming = existing_direct_links.get("streaming_links", []) or []
             old_download = existing_direct_links.get("download_links", []) or []
 
-            # 🔄 دمج الروابط القديمة مع الجديدة وإزالة التكرار مع الحفاظ على الترتيب
+            # دمج الروابط القديمة مع الجديدة وإزالة التكرار
             final_streaming = list(dict.fromkeys(old_streaming + new_streaming_links))
             final_download = list(dict.fromkeys(old_download + new_download_links))
 
-        # تحديث watch_url برابط صالح
         watch_url_val = existing_watch_url if existing_watch_url else (final_streaming[0] if final_streaming else None)
 
         episode_data = {
@@ -325,9 +348,8 @@ def process_item(page, item_page_url, cat_type):
             }
         }
 
-        # حفظ / تحديث الحلقة
         supabase.table("episodes_cima").upsert(episode_data, on_conflict="series_id,season_number,episode_number").execute()
-        print(f"    ✅ تم تحديث/حفظ الحلقة بنجاح | (مشاهدة: {len(final_streaming)} | تحميل: {len(final_download)})")
+        print(f"    ✅ تم التحديث بنجاح | (مشاهدة: {len(final_streaming)} | تحميل: {len(final_download)})")
 
     except Exception as e:
         print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
@@ -338,7 +360,7 @@ def scrape_akwam_site():
         ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي")
     ]
 
-    print("🚀 بدء السكربت المخصص للمسلسلات مع التحديث الذكي للروابط...")
+    print("🚀 بدء السكربت المخصص للمسلسلات مع التحديث الذكي والضغط الفعال...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
