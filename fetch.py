@@ -24,7 +24,6 @@ def clean_text(text):
     return " ".join(text.split()).strip()
 
 def normalize_series_title(raw_title):
-    # تنظيف العنوان من الكلمات الزائدة في البداية
     name = re.sub(r'^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج|حصريا|جديد)?\s*', '', raw_title).strip()
     
     season_num = 1
@@ -45,11 +44,9 @@ def normalize_series_title(raw_title):
                 season_num = num
                 break
 
-    # استخراج اسم المسلسل الحقيقي ومنع أخذ الكلمات الوهمية
     clean_name = re.sub(r'\s*(الموسم|Season|الاول|الأول|الثاني|الثالث|الرابع|الخامس|الحلقة|\d+|-|\||مترجم|مدبلج|اكوام|Akwam).*', '', name, flags=re.IGNORECASE).strip()
     clean_name = clean_text(clean_name)
     
-    # فحص إضافي للتأكد أن الاسم ليس كلمة غير مفيدة مثل "جديد" أو "مسلسل"
     invalid_names = ["جديد", "حصريا", "مسلسل", "انمي", "برنامج", "الحلقة"]
     if not clean_name or clean_name in invalid_names or len(clean_name) < 2:
         return None, None, None
@@ -101,58 +98,118 @@ def get_tmdb_poster(title):
 def fetch_download_links_only(page, item_page_url):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
-    download_page_url = f"{clean_base_url}/download"
+    
+    # تجربتان: الرابط المباشر أو التوجه لصفحة التحميل المخصصة
+    target_urls = [f"{clean_base_url}/download", clean_base_url]
 
-    try:
-        page.goto(download_page_url, wait_until="domcontentloaded", timeout=15000)
-        time.sleep(2)
-        
-        links = page.evaluate("""() => {
-            const anchors = Array.from(document.querySelectorAll('a[href]'));
-            return anchors.map(a => a.href).filter(h => {
-                if (!h) return false;
-                if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
-                return h.includes('download') || h.includes('link') || h.includes('file') || h.includes('niramirus') || h.includes('server') || h.includes('direct') || h.includes('get') || !h.includes('akwams.org');
-            });
-        }""")
-        
-        for link in links:
-            if link and link not in raw_download_links and not link.startswith("chrome-error://"):
-                raw_download_links.append(link)
-    except Exception:
-        pass
+    for target in target_urls:
+        try:
+            res = page.goto(target, wait_until="domcontentloaded", timeout=12000)
+            if res and res.status == 404 and target != clean_base_url:
+                continue
+                
+            time.sleep(1.5)
+            
+            links = page.evaluate("""() => {
+                const anchors = Array.from(document.querySelectorAll('a[href]'));
+                return anchors.map(a => a.href).filter(h => {
+                    if (!h || h.startsWith('javascript') || h.startsWith('chrome-error://')) return false;
+                    if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
+                    
+                    // استخراج روابط التحميل الخارجية والداخلية المباشرة
+                    return h.includes('/download/') || 
+                           h.includes('link') || 
+                           h.includes('file') || 
+                           h.includes('niramirus') || 
+                           h.includes('server') ||
+                           h.includes('direct') ||
+                           h.includes('get') ||
+                           !h.includes('akwams.org');
+                });
+            }""")
+            
+            for link in links:
+                if link and link not in raw_download_links:
+                    raw_download_links.append(link)
+                    
+            if raw_download_links:
+                break
+        except Exception:
+            pass
 
     return [shorten_link_via_shrinkme(l) for l in raw_download_links if l]
 
 def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
-    extracted_streaming_links = []
+    extracted_streaming_links = set()
     
+    # التقاط أي طلبات شبكة تلقائية من الـ iFrames
+    def handle_frame_or_req(route, request):
+        url = request.url
+        if "embed" in url or "player" in url or "stream" in url or "vidsrc" in url or "m3u8" in url:
+            if "akwams" not in url:
+                extracted_streaming_links.add(url)
+        route.continue_()
+
     try:
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
-        time.sleep(3)
+        time.sleep(2)
         
-        server_buttons = page.locator('button:has-text("سيرفر"), a:has-text("سيرفر"), .servers-list button, div[class*="server"] button').all()
+        # 1. البحث في الـ iFrames المباشرة
+        iframes = page.locator('iframe').all()
+        for iframe in iframes:
+            try:
+                src = iframe.get_attribute('src') or iframe.get_attribute('data-src')
+                if src and "akwams" not in src and not src.startswith("about:blank"):
+                    extracted_streaming_links.add(src)
+            except Exception:
+                pass
+
+        # 2. الضغط على جميع أزرار السيرفرات المتاحة
+        server_selectors = [
+            'button:has-text("سيرفر")', 
+            'a:has-text("سيرفر")', 
+            '.servers-list button', 
+            '.servers-list a',
+            'ul.servers button',
+            'div[class*="server"] button',
+            'div[class*="server"] a'
+        ]
+        
+        server_buttons = []
+        for selector in server_selectors:
+            btns = page.locator(selector).all()
+            if btns:
+                server_buttons.extend(btns)
+
         if not server_buttons:
             server_buttons = page.locator('button').all()
 
-        for btn in server_buttons:
+        for btn in server_buttons[:8]:  # فحص أول 8 سيرفرات كحد أقصى لتجنب البطء
             try:
                 if btn.is_visible():
-                    btn.click(timeout=2000)
-                    time.sleep(1.5)
-                    frame_url = page.evaluate("() => document.querySelector('iframe')?.src")
-                    if frame_url and frame_url not in extracted_streaming_links and "akwams" not in frame_url and "about:blank" not in frame_url:
-                        extracted_streaming_links.append(frame_url)
+                    btn.click(timeout=1500)
+                    time.sleep(1)
+                    
+                    # فحص الإطار بعد الضغط
+                    frame_url = page.evaluate("() => document.querySelector('iframe')?.src || document.querySelector('iframe')?.getAttribute('data-src')")
+                    if frame_url and "akwams" not in frame_url and not frame_url.startswith("about:blank"):
+                        extracted_streaming_links.add(frame_url)
             except Exception:
                 pass
+
+        # 3. جلب الـ Frames المسجلة بالصفحة
+        for frame in page.frames:
+            f_url = frame.url
+            if f_url and "akwams.org" not in f_url and "about:blank" not in f_url and not f_url.startswith("chrome-error://"):
+                extracted_streaming_links.add(f_url)
+
     except Exception:
         pass
         
-    return list(set(extracted_streaming_links))
+    return list(extracted_streaming_links)
 
 def process_item(page, item_page_url, cat_type):
-    # التخطي الفوري إذا لم يكن العنصر مسلسلات
     if "مسلسلات" not in cat_type:
         return
 
@@ -174,7 +231,7 @@ def process_item(page, item_page_url, cat_type):
         return
 
     unique_season_title, s_num, raw_base_name = normalize_series_title(title)
-    if not unique_season_title: # تخطي السجل إذا كان العنوان غير صالح
+    if not unique_season_title:
         return
         
     e_num = extract_episode_number(title)
@@ -234,6 +291,7 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         return
 
+    # سحب الروابط بتحديثات المتانة الجديدة
     extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
     extracted_download_links = fetch_download_links_only(page, item_page_url)
 
@@ -255,7 +313,6 @@ def process_item(page, item_page_url, cat_type):
         pass
 
 def scrape_akwam_site():
-    # أقسام المسلسلات فقط
     categories = [
         ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
         ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي")
