@@ -141,7 +141,6 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = set()
 
-    # 1. التقاط الاستجابات الشبكية (AJAX Network Interception)
     def handle_response(response):
         try:
             url = response.url
@@ -168,7 +167,6 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
 
-        # 2. البحث والضغط المباشر عبر DOM JavaScript على أزرار السيرفرات
         server_links = page.evaluate("""() => {
             const elements = Array.from(document.querySelectorAll('a, button, div, span'))
                 .filter(el => {
@@ -207,7 +205,6 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
             except Exception:
                 pass
 
-        # 3. جلب الـ Frames بالصفحة
         for frame in page.frames:
             f_url = frame.url
             if f_url and "akwams" not in f_url and "about:blank" not in f_url and not f_url.startswith("chrome-error://"):
@@ -305,12 +302,8 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         return
 
-    # سحب الروابط بتحديثات المتانة الجديدة
-    new_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
-    new_download_links = fetch_download_links_only(page, item_page_url)
-
+    # 🛑 فحص وجود الحلقة مسبقاً والتحقق من عدد الروابط لعمل تخطي عند الحاجة
     try:
-        # فحص إذا كانت الحلقة موجودة في Supabase مسبقاً
         existing_ep = supabase.table("episodes_cima") \
             .select("id, watch_url, direct_links") \
             .eq("series_id", series_id) \
@@ -318,39 +311,50 @@ def process_item(page, item_page_url, cat_type):
             .eq("episode_number", e_num) \
             .execute()
 
-        final_streaming = new_streaming_links
-        final_download = new_download_links
+        old_streaming = []
+        old_download = []
         existing_watch_url = None
 
         if existing_ep.data:
             ep_row = existing_ep.data[0]
             existing_watch_url = ep_row.get("watch_url")
             existing_direct_links = ep_row.get("direct_links") or {}
-
             old_streaming = existing_direct_links.get("streaming_links", []) or []
             old_download = existing_direct_links.get("download_links", []) or []
 
-            # دمج الروابط القديمة مع الجديدة وإزالة التكرار
-            final_streaming = list(dict.fromkeys(old_streaming + new_streaming_links))
-            final_download = list(dict.fromkeys(old_download + new_download_links))
+            # 🛑 الشرط: إذا كان يحتوي على أكثر من رابط للمشاهدة والتحميل (أو رابط واحد على الأقل لكلاهما)
+            if len(old_streaming) > 1 and len(old_download) > 1:
+                print(f"    ⏭️ تخطي: الحلقة تحتوي بالفعل على روابط متعدّدة (مشاهدة: {len(old_streaming)} | تحميل: {len(old_download)})")
+                return
 
-        watch_url_val = existing_watch_url if existing_watch_url else (final_streaming[0] if final_streaming else None)
+    except Exception:
+        old_streaming, old_download, existing_watch_url = [], [], None
 
-        episode_data = {
-            "series_id": series_id,
-            "title": f"الحلقة {e_num}",
-            "season_number": s_num,
-            "episode_number": e_num,
-            "watch_url": watch_url_val,
-            "direct_links": {
-                "streaming_links": final_streaming,
-                "download_links": final_download
-            }
+    # سحب الروابط فقط في حالة عدم استيفاء شرط التخطي
+    new_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
+    new_download_links = fetch_download_links_only(page, item_page_url)
+
+    # دمج الروابط القديمة إن وجدت مع الجديدة ومنع التكرار
+    final_streaming = list(dict.fromkeys(old_streaming + new_streaming_links))
+    final_download = list(dict.fromkeys(old_download + new_download_links))
+
+    watch_url_val = existing_watch_url if existing_watch_url else (final_streaming[0] if final_streaming else None)
+
+    episode_data = {
+        "series_id": series_id,
+        "title": f"الحلقة {e_num}",
+        "season_number": s_num,
+        "episode_number": e_num,
+        "watch_url": watch_url_val,
+        "direct_links": {
+            "streaming_links": final_streaming,
+            "download_links": final_download
         }
+    }
 
+    try:
         supabase.table("episodes_cima").upsert(episode_data, on_conflict="series_id,season_number,episode_number").execute()
         print(f"    ✅ تم التحديث بنجاح | (مشاهدة: {len(final_streaming)} | تحميل: {len(final_download)})")
-
     except Exception as e:
         print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
 
@@ -360,7 +364,7 @@ def scrape_akwam_site():
         ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي")
     ]
 
-    print("🚀 بدء السكربت المخصص للمسلسلات مع التحديث الذكي والضغط الفعال...")
+    print("🚀 بدء السكربت المخصص للمسلسلات مع التخطي الذكي...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
