@@ -88,7 +88,7 @@ def process_series_item(page, item_page_url):
             links = check_ep.data[0].get("direct_links", {}).get("streaming_links", [])
             # التخطي يحدث فقط إذا كانت اللينكات > 1 AND البوستر موجود بالفعل
             if len(links) > 1 and has_poster:
-                print(f"⏩ تخطي (مكتملة ولهو بوستر): {unique_season_title} | حلقة {e_num}")
+                print(f"⏩ تخطي (مكتملة ولها بوستر): {unique_season_title} | حلقة {e_num}")
                 return
 
     # استخراج البوستر من الصفحة إذا لم يكن موجوداً
@@ -98,7 +98,7 @@ def process_series_item(page, item_page_url):
         # إذا كان المسلسل موجود ولكن البوستر ناقص، نقوم بتحديثه
         if not has_poster and poster_url:
             supabase.table("tv_series").update({"poster_url": poster_url}).eq("id", series_id).execute()
-            print(    🖼️ تم تحديث البوستر الناقص للمسلسل: {unique_season_title}")
+            print(f"🖼️ تم تحديث البوستر الناقص للمسلسل: {unique_season_title}")
     else:
         # إنشاء مسلسل جديد بالبوستر
         new_series = supabase.table("tv_series").insert({
