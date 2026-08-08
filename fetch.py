@@ -99,7 +99,6 @@ def fetch_download_links_only(page, item_page_url):
     raw_download_links = []
     clean_base_url = item_page_url.rstrip('/')
     
-    # تجربتان: الرابط المباشر أو التوجه لصفحة التحميل المخصصة
     target_urls = [f"{clean_base_url}/download", clean_base_url]
 
     for target in target_urls:
@@ -116,7 +115,6 @@ def fetch_download_links_only(page, item_page_url):
                     if (!h || h.startsWith('javascript') || h.startsWith('chrome-error://')) return false;
                     if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
                     
-                    // استخراج روابط التحميل الخارجية والداخلية المباشرة
                     return h.includes('/download/') || 
                            h.includes('link') || 
                            h.includes('file') || 
@@ -142,20 +140,12 @@ def fetch_download_links_only(page, item_page_url):
 def fetch_streaming_links_with_clicking(page, item_page_url):
     watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
     extracted_streaming_links = set()
-    
-    # التقاط أي طلبات شبكة تلقائية من الـ iFrames
-    def handle_frame_or_req(route, request):
-        url = request.url
-        if "embed" in url or "player" in url or "stream" in url or "vidsrc" in url or "m3u8" in url:
-            if "akwams" not in url:
-                extracted_streaming_links.add(url)
-        route.continue_()
 
     try:
         page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
         time.sleep(2)
         
-        # 1. البحث في الـ iFrames المباشرة
+        # 1. فحص الإطارات المباشرة
         iframes = page.locator('iframe').all()
         for iframe in iframes:
             try:
@@ -165,7 +155,7 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
             except Exception:
                 pass
 
-        # 2. الضغط على جميع أزرار السيرفرات المتاحة
+        # 2. الضغط على أزرار السيرفرات
         server_selectors = [
             'button:has-text("سيرفر")', 
             'a:has-text("سيرفر")', 
@@ -185,20 +175,19 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
         if not server_buttons:
             server_buttons = page.locator('button').all()
 
-        for btn in server_buttons[:8]:  # فحص أول 8 سيرفرات كحد أقصى لتجنب البطء
+        for btn in server_buttons[:8]:
             try:
                 if btn.is_visible():
                     btn.click(timeout=1500)
                     time.sleep(1)
                     
-                    # فحص الإطار بعد الضغط
                     frame_url = page.evaluate("() => document.querySelector('iframe')?.src || document.querySelector('iframe')?.getAttribute('data-src')")
                     if frame_url and "akwams" not in frame_url and not frame_url.startswith("about:blank"):
                         extracted_streaming_links.add(frame_url)
             except Exception:
                 pass
 
-        # 3. جلب الـ Frames المسجلة بالصفحة
+        # 3. جلب الـ Frames بالصفحة
         for frame in page.frames:
             f_url = frame.url
             if f_url and "akwams.org" not in f_url and "about:blank" not in f_url and not f_url.startswith("chrome-error://"):
@@ -283,6 +272,7 @@ def process_item(page, item_page_url, cat_type):
     }
 
     try:
+        # حفظ أو تحديث بيانات المسلسل
         supabase.table("tv_series").upsert(formatted_series, on_conflict="title").execute()
         get_id = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
         if not get_id.data:
@@ -291,26 +281,56 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         return
 
-    # سحب الروابط بتحديثات المتانة الجديدة
-    extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
-    extracted_download_links = fetch_download_links_only(page, item_page_url)
+    # سحب الروابط الجديدة من الصفحة
+    new_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
+    new_download_links = fetch_download_links_only(page, item_page_url)
 
-    episode_data = {
-        "series_id": series_id,
-        "title": f"الحلقة {e_num}",
-        "season_number": s_num,
-        "episode_number": e_num,
-        "watch_url": extracted_streaming_links[0] if extracted_streaming_links else None,
-        "direct_links": {
-            "streaming_links": extracted_streaming_links,
-            "download_links": extracted_download_links
-        }
-    }
     try:
+        # 🔍 الاستعلام عن الحلقة هل هي موجودة مسبقاً أم لا؟
+        existing_ep = supabase.table("episodes_cima") \
+            .select("id, watch_url, direct_links") \
+            .eq("series_id", series_id) \
+            .eq("season_number", s_num) \
+            .eq("episode_number", e_num) \
+            .execute()
+
+        final_streaming = new_streaming_links
+        final_download = new_download_links
+        existing_watch_url = None
+
+        if existing_ep.data:
+            ep_row = existing_ep.data[0]
+            existing_watch_url = ep_row.get("watch_url")
+            existing_direct_links = ep_row.get("direct_links") or {}
+
+            old_streaming = existing_direct_links.get("streaming_links", []) or []
+            old_download = existing_direct_links.get("download_links", []) or []
+
+            # 🔄 دمج الروابط القديمة مع الجديدة وإزالة التكرار مع الحفاظ على الترتيب
+            final_streaming = list(dict.fromkeys(old_streaming + new_streaming_links))
+            final_download = list(dict.fromkeys(old_download + new_download_links))
+
+        # تحديث watch_url برابط صالح
+        watch_url_val = existing_watch_url if existing_watch_url else (final_streaming[0] if final_streaming else None)
+
+        episode_data = {
+            "series_id": series_id,
+            "title": f"الحلقة {e_num}",
+            "season_number": s_num,
+            "episode_number": e_num,
+            "watch_url": watch_url_val,
+            "direct_links": {
+                "streaming_links": final_streaming,
+                "download_links": final_download
+            }
+        }
+
+        # حفظ / تحديث الحلقة
         supabase.table("episodes_cima").upsert(episode_data, on_conflict="series_id,season_number,episode_number").execute()
-        print(f"    ✅ تم حفظ الحلقة بنجاح.")
-    except Exception:
-        pass
+        print(f"    ✅ تم تحديث/حفظ الحلقة بنجاح | (مشاهدة: {len(final_streaming)} | تحميل: {len(final_download)})")
+
+    except Exception as e:
+        print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
 
 def scrape_akwam_site():
     categories = [
@@ -318,7 +338,7 @@ def scrape_akwam_site():
         ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي")
     ]
 
-    print("🚀 بدء السكربت المخصص للمسلسلات فقط...")
+    print("🚀 بدء السكربت المخصص للمسلسلات مع التحديث الذكي للروابط...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
