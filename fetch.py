@@ -21,23 +21,29 @@ def clean_text(text):
     return " ".join(re.sub(r'[\"\'\[\]\{\}]', '', text).split()).strip()
 
 def get_tmdb_poster(title):
-    try:
-        clean_name = re.sub(r'[\d\-\_\:\,\.\(\)]', ' ', title)
-        clean_name = clean_text(clean_name)
-        if not clean_name or len(clean_name) < 2:
-            return None
-        query = urllib.parse.quote(clean_name)
-        url = f"https://api.themoviedb.org/3/search/tv?api_key=3f4534f3c7e1451f28b49231f47d3c3d&query={query}&language=ar"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            results = data.get("results", [])
-            for res in results:
-                poster_path = res.get("poster_path")
-                if poster_path:
-                    return f"https://image.tmdb.org/t/p/w500{poster_path}"
-    except Exception:
-        pass
+    """محاولة جلب البوستر مع دعم البحث بالعربية والإنجليزية لتجنب فقدان البوستر"""
+    clean_name = re.sub(r'[\d\-\_\:\,\.\(\)]', ' ', title)
+    clean_name = clean_text(clean_name)
+    if not clean_name or len(clean_name) < 2:
+        return None
+
+    queries = [clean_name]
+    # محاولة ترجمة بسيطة أو إزالة الكلمات الزائدة إذا وجدت
+    for q in queries:
+        try:
+            encoded_query = urllib.parse.quote(q)
+            # البحث العام (أفلام ومسلسلات) أو البحث المخصص
+            url = f"https://api.themoviedb.org/3/search/multi?api_key=3f4534f3c7e1451f28b49231f47d3c3d&query={encoded_query}&language=ar"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+                results = data.get("results", [])
+                for res in results:
+                    poster_path = res.get("poster_path")
+                    if poster_path:
+                        return f"https://image.tmdb.org/t/p/w500{poster_path}"
+        except Exception:
+            pass
     return None
 
 def normalize_series_title(raw_title):
@@ -77,17 +83,19 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
                 btn.click()
                 time.sleep(1)
                 frame = page.evaluate("() => document.querySelector('iframe')?.src")
-                if frame and "akwams" not in frame: extracted.append(frame)
-    except: pass
+                if frame and "akwams" not in frame: 
+                    extracted.append(frame)
+    except: 
+        pass
     return list(set(extracted))
 
 def process_series_item(page, item_page_url):
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=10000)
         title = clean_text(page.title())
-    except: return
+    except: 
+        return
 
-    # فلترة صارمة لمنع الأقسام والتصنيفات وأخطاء الموقع
     invalid_keywords = [
         "page not found", "404", "افلام", "أفلام", "انمي", "ات انمي", 
         "ات اجنبي", "ات اسيوية", "ات تركية", "ات كرتون", "ات وثائقية", 
@@ -99,13 +107,19 @@ def process_series_item(page, item_page_url):
     unique_season_title, s_num, raw_base_name = normalize_series_title(title)
     e_num = extract_episode_number(title)
 
-    # 1. التحقق من وجود المسلسل أو إنشائه مع جلب البوستر الحقيقي
+    # 1. التحقق الذكي من وجود المسلسل لتجنب التكرار
     existing = supabase.table("tv_series").select("id, poster_url").eq("title", unique_season_title).execute()
     
     if existing.data:
         series_id = existing.data[0]["id"]
+        current_poster = existing.data[0].get("poster_url")
+        # إذا كان المسلسل موجوداً لكن ليس لديه بوستر، نحاول جلبه وتحديثه
+        if not current_poster:
+            new_poster = get_tmdb_poster(raw_base_name)
+            if new_poster:
+                supabase.table("tv_series").update({"poster_url": new_poster}).eq("id", series_id).execute()
     else:
-        # جلب البوستر الحقيقي من TMDb
+        # جلب البوستر الحقيقي من TMDb عند الإنشاء لأول مرة
         poster_url = get_tmdb_poster(raw_base_name)
         
         new_series_data = {
@@ -149,19 +163,22 @@ def scrape_akwam_site():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_num = 1
+        visited_links = set() # ذاكرة مؤقتة لمنع تكرار معالجة نفس الرابط داخل السشن
         
         while True:
             url = f"https://akwams.org/category/مسلسلات-اجنبي/page/{page_num}/"
             page.goto(url)
             
-            # فلترة الروابط لمنع الدخول على التصنيفات أو الصفحات الفرعية
             links = page.evaluate("""() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href)
                                      .filter(h => h.includes('akwams.org') && !h.includes('/category/') && !h.includes('/page/') && h.split('/').length > 4)""")
             
-            unique_links = list(set(links))
-            if not unique_links: break
+            unique_links = [l for l in list(set(links)) if l not in visited_links]
+            if not unique_links: 
+                # إذا انتهت الصفحات أو لم تعود توجد روابط جديدة
+                break
             
             for link in unique_links:
+                visited_links.add(link)
                 process_series_item(page, link)
             
             page_num += 1
