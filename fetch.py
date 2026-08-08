@@ -72,23 +72,40 @@ def process_series_item(page, item_page_url):
     unique_season_title, s_num, raw_base_name = normalize_series_title(title)
     e_num = extract_episode_number(title)
 
-    # التحقق من وجود الحلقة وتخطيها إذا كانت مكتملة
-    existing_series = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
+    # 1. التحقق من وجود المسلسل والبوستر ولينكات الحلقات مسبقاً
+    existing_series = supabase.table("tv_series").select("id, poster_url").eq("title", unique_season_title).execute()
+    
+    has_poster = False
+    series_id = None
+
     if existing_series.data:
         series_id = existing_series.data[0]["id"]
+        has_poster = bool(existing_series.data[0].get("poster_url"))
+        
+        # التحقق من حالة الحلقة وهل لينكات التشغيل أكتر من 1
         check_ep = supabase.table("episodes_cima").select("direct_links").eq("series_id", series_id).eq("season_number", s_num).eq("episode_number", e_num).execute()
         if check_ep.data:
             links = check_ep.data[0].get("direct_links", {}).get("streaming_links", [])
-            if len(links) > 1:
-                print(f"⏩ تخطي (مكتملة): {unique_season_title} | حلقة {e_num}")
+            # التخطي يحدث فقط إذا كانت اللينكات > 1 AND البوستر موجود بالفعل
+            if len(links) > 1 and has_poster:
+                print(f"⏩ تخطي (مكتملة ولهو بوستر): {unique_season_title} | حلقة {e_num}")
                 return
 
-    # معالجة البوستر والحفظ
+    # استخراج البوستر من الصفحة إذا لم يكن موجوداً
     poster_url = get_poster_from_page(page)
+
     if existing_series.data:
-        series_id = existing_series.data[0]["id"]
+        # إذا كان المسلسل موجود ولكن البوستر ناقص، نقوم بتحديثه
+        if not has_poster and poster_url:
+            supabase.table("tv_series").update({"poster_url": poster_url}).eq("id", series_id).execute()
+            print(    🖼️ تم تحديث البوستر الناقص للمسلسل: {unique_season_title}")
     else:
-        new_series = supabase.table("tv_series").insert({"title": unique_season_title, "category_type": "مسلسلات اجنبي", "poster_url": poster_url}).execute()
+        # إنشاء مسلسل جديد بالبوستر
+        new_series = supabase.table("tv_series").insert({
+            "title": unique_season_title, 
+            "category_type": "مسلسلات اجنبي", 
+            "poster_url": poster_url
+        }).execute()
         series_id = new_series.data[0]["id"]
 
     print(f"    📺 جاري المعالجة: {unique_season_title} | حلقة {e_num}")
