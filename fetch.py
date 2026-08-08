@@ -57,16 +57,6 @@ def normalize_series_title(raw_title):
     unified_title = f"{clean_name} - الموسم {season_num}"
     return unified_title, season_num, clean_name
 
-def normalize_movie_title(raw_title):
-    name = re.sub(r'^(مشاهدة|تحميل|فيلم)?\s*', '', raw_title).strip()
-    clean_name = re.sub(r'\s*(-|\||مترجم|مدبلج|اكوام|Akwam|اونلاين|بجودة).*', '', name, flags=re.IGNORECASE).strip()
-    clean_name = clean_text(clean_name)
-    
-    invalid_names = ["جديد", "حصريا", "فيلم"]
-    if not clean_name or clean_name in invalid_names or len(clean_name) < 2:
-        return None
-    return clean_name
-
 def extract_episode_number(text):
     e_match = re.search(r'(?:الحلقة|Episode)\s*(?:الـ|ال)?\s*(\d+)', text, re.IGNORECASE)
     return int(e_match.group(1)) if e_match else 1
@@ -162,6 +152,10 @@ def fetch_streaming_links_with_clicking(page, item_page_url):
     return list(set(extracted_streaming_links))
 
 def process_item(page, item_page_url, cat_type):
+    # التخطي الفوري إذا لم يكن العنصر مسلسلات
+    if "مسلسلات" not in cat_type:
+        return
+
     try:
         page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
     except Exception:
@@ -179,6 +173,13 @@ def process_item(page, item_page_url, cat_type):
     if not title or any(kw in title.lower() for kw in invalid_keywords):
         return
 
+    unique_season_title, s_num, raw_base_name = normalize_series_title(title)
+    if not unique_season_title: # تخطي السجل إذا كان العنوان غير صالح
+        return
+        
+    e_num = extract_episode_number(title)
+    print(f"    📺 مسلسل: {unique_season_title} | حلقة {e_num}")
+
     poster = "غير متوفر"
     try:
         poster = page.evaluate("""() => {
@@ -189,6 +190,9 @@ def process_item(page, item_page_url, cat_type):
         }""")
     except Exception:
         pass
+
+    if poster == "غير متوفر" or not poster.startswith("http"):
+        poster = get_tmdb_poster(raw_base_name)
 
     description = "غير متوفر"
     try:
@@ -212,97 +216,52 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         pass
 
-    # معالجة المسلسلات
-    if "مسلسلات" in cat_type:
-        unique_season_title, s_num, raw_base_name = normalize_series_title(title)
-        if not unique_season_title: # تخطي السجل إذا كان العنوان غير صالح
+    formatted_series = {
+        "title": unique_season_title,
+        "category_type": cat_type,
+        "poster_url": poster,
+        "description": description,
+        "rating": rating,
+        "genres": [clean_text(g) for g in genres if clean_text(g)]
+    }
+
+    try:
+        supabase.table("tv_series").upsert(formatted_series, on_conflict="title").execute()
+        get_id = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
+        if not get_id.data:
             return
-            
-        e_num = extract_episode_number(title)
-        print(f"    📺 مسلسل: {unique_season_title} | حلقة {e_num}")
+        series_id = get_id.data[0]["id"]
+    except Exception:
+        return
 
-        if poster == "غير متوفر" or not poster.startswith("http"):
-            poster = get_tmdb_poster(raw_base_name)
+    extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
+    extracted_download_links = fetch_download_links_only(page, item_page_url)
 
-        formatted_series = {
-            "title": unique_season_title,
-            "category_type": cat_type,
-            "poster_url": poster,
-            "description": description,
-            "rating": rating,
-            "genres": [clean_text(g) for g in genres if clean_text(g)]
+    episode_data = {
+        "series_id": series_id,
+        "title": f"الحلقة {e_num}",
+        "season_number": s_num,
+        "episode_number": e_num,
+        "watch_url": extracted_streaming_links[0] if extracted_streaming_links else None,
+        "direct_links": {
+            "streaming_links": extracted_streaming_links,
+            "download_links": extracted_download_links
         }
-
-        try:
-            supabase.table("tv_series").upsert(formatted_series, on_conflict="title").execute()
-            get_id = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
-            if not get_id.data:
-                return
-            series_id = get_id.data[0]["id"]
-        except Exception:
-            return
-
-        extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
-        extracted_download_links = fetch_download_links_only(page, item_page_url)
-
-        episode_data = {
-            "series_id": series_id,
-            "title": f"الحلقة {e_num}",
-            "season_number": s_num,
-            "episode_number": e_num,
-            "watch_url": extracted_streaming_links[0] if extracted_streaming_links else None,
-            "direct_links": {
-                "streaming_links": extracted_streaming_links,
-                "download_links": extracted_download_links
-            }
-        }
-        try:
-            supabase.table("episodes_cima").upsert(episode_data, on_conflict="series_id,season_number,episode_number").execute()
-            print(f"    ✅ تم حفظ الحلقة بنجاح.")
-        except Exception:
-            pass
-
-    # معالجة الأفلام
-    elif "افلام" in cat_type or "أفلام" in cat_type:
-        movie_title = normalize_movie_title(title)
-        if not movie_title: # تخطي السجل إذا كان العنوان غير صالح
-            return
-            
-        print(f"    🎬 فيلم: {movie_title}")
-
-        if poster == "غير متوفر" or not poster.startswith("http"):
-            poster = get_tmdb_poster(movie_title)
-
-        extracted_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
-        extracted_download_links = fetch_download_links_only(page, item_page_url)
-
-        movie_data = {
-            "title": movie_title,
-            "category_type": cat_type,
-            "poster_url": poster,
-            "description": description,
-            "rating": rating,
-            "genres": [clean_text(g) for g in genres if clean_text(g)],
-            "watch_url": extracted_streaming_links[0] if extracted_streaming_links else None,
-            "direct_links": {
-                "streaming_links": extracted_streaming_links,
-                "download_links": extracted_download_links
-            }
-        }
-        try:
-            supabase.table("movies_cima").upsert(movie_data, on_conflict="title").execute()
-            print(f"    ✅ تم حفظ الفيلم بنجاح.")
-        except Exception as e:
-            print(f"    ❌ خطأ في حفظ الفيلم: {e}")
+    }
+    try:
+        supabase.table("episodes_cima").upsert(episode_data, on_conflict="series_id,season_number,episode_number").execute()
+        print(f"    ✅ تم حفظ الحلقة بنجاح.")
+    except Exception:
+        pass
 
 def scrape_akwam_site():
+    # أقسام المسلسلات فقط
     categories = [
         ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
-        ("https://akwams.org/category/افلام-اجنبي", "افلام اجنبي"),
-        ("https://akwams.org/category/افلام-عربي", "افلام عربي")
+        ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي")
     ]
 
-    print("🚀 بدء السكربت الشامل للأفلام والمسلسلات...")
+    print("🚀 بدء السكربت المخصص للمسلسلات فقط...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
