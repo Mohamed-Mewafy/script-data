@@ -1,521 +1,533 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  useAnimes,
-  useFeaturedAnimes,
-  useFavorites,
-  useContinueWatching,
-} from '@/hooks/useData';
-import { useSEO } from '@/hooks/useSEO';
-import { supabase } from '@/lib/supabaseClient';
-import { cleanTitle } from '@/lib/format';
-import { Hero } from '@/components/Hero';
-import { AnimeCard } from '@/components/AnimeCard';
-import { CategoryChips } from '@/components/CategoryChips';
-import { CardSkeleton } from '@/components/Skeletons';
-import { useRouter } from '@/context/RouterContext';
-import {
-  Play,
-  Flame,
-  Star,
-  Sparkles,
-  Compass,
-  Film,
-  Tv,
-  ChevronLeft,
-  ChevronRight,
-} from 'lucide-react';
+import json
+import os
+import re
+import time
+import urllib.parse
+import urllib.request
+from playwright.sync_api import sync_playwright
+import requests
+from supabase import Client, create_client
 
-function mapCimaMovie(item: any): any {
-  return {
-    id: item.id,
-    title: cleanTitle(item.title),
-    media_type: 'movie',
-    cover_image_url: item.poster_url,
-    banner_image_url: item.poster_url,
-    release_year: item.year,
-    rating_average: item.rating || 0,
-    rating_count: 0,
-    view_count: 0,
-    genres: item.genres || item.category_type || null,
-    synopsis: item.description || null,
-    created_at: item.created_at || new Date().toISOString(),
-  };
-}
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN")
 
-function mapCimaSeries(item: any): any {
-  // تنظيف العنوان وإزالة أي كلمات موسم خاطئة أو أرقام حلقات متداخلة جلبتها السكريبتات مثل "- الموسم 8"
-  let rawTitle = cleanTitle(item.title);
-  let cleanedTitle = rawTitle.replace(/\s*-\s*الموسم\s*\d+/g, '').trim();
+if not SUPABASE_URL or not SUPABASE_KEY:
+  raise ValueError(
+      "⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل"
+      " صحيح."
+  )
 
-  return {
-    id: item.id,
-    title: cleanedTitle,
-    media_type: 'series',
-    cover_image_url: item.poster_url,
-    banner_image_url: item.poster_url,
-    release_year: item.year,
-    rating_average: item.rating || 0,
-    rating_count: 0,
-    view_count: 0,
-    genres: item.genres || item.category_type || null,
-    synopsis: item.description || null,
-    created_at: item.created_at || new Date().toISOString(),
-  };
-}
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-const MOVIE_SECTIONS: { key: string; label: string; category: string; year: number; icon: React.ReactNode; href: string }[] = [
-  { key: 'ar-2026', label: 'أفلام عربي 2026', category: 'افلام عربي', year: 2026, icon: <Film className="h-5 w-5 sm:h-6 sm:w-6 text-blue-400" />, href: '/movie-list/%D8%A7%D9%81%D9%84%D8%A7%D9%81%20%D8%B9%D8%B1%D8%A8%D9%8A/2026' },
-  { key: 'en-2026', label: 'أفلام أجنبي 2026', category: 'افلام اجنبي', year: 2026, icon: <Film className="h-5 w-5 sm:h-6 sm:w-6 text-purple-400" />, href: '/movie-list/%D8%A7%D9%81%D9%84%D8%A7%D9%81%20%D8%A7%D8%AC%D9%86%D8%A8%D9%8A/2026' },
-  { key: 'ramadan-2026', label: 'مسلسلات رمضان 2026', category: 'مسلسلات رمضان 2026', year: 2026, icon: <Film className="h-5 w-5 sm:h-6 sm:w-6 text-blue-400" />, href: '/movie-list/%D9%85%D8%B3%D9%84%D8%B3%D9%84%D8%A7%D8%AA%20%D8%B1%D9%85%D8%B6%D8%A7%D9%86/2026' },
-  { key: 'ar-2025', label: 'أفلام عربي 2025', category: 'افلام عربي', year: 2025, icon: <Film className="h-5 w-5 sm:h-6 sm:w-6 text-cyan-400" />, href: '/movie-list/%D8%A7%D9%81%D9%84%D8%A7%D9%81%20%D8%B9%D8%B1%D8%A8%D9%8A/2025' },
-  { key: 'en-2025', label: 'أفلام أجنبي 2025', category: 'افلام اجنبي', year: 2025, icon: <Film className="h-5 w-5 sm:h-6 sm:w-6 text-amber-400" />, href: '/movie-list/%D8%A7%D9%81%D9%84%D8%A7%D9%81%20%D8%A7%D8%AC%D9%86%D8%A8%D9%8A/2025' },
-];
 
-const hideScrollbarStyle = {
-  overflowX: 'auto' as const,
-  overflowY: 'hidden' as const,
-  scrollbarWidth: 'none' as const,
-  msOverflowStyle: 'none' as const,
-  WebkitOverflowScrolling: 'touch' as const,
-};
+def clean_text(text):
+  if not text:
+    return ""
+  text = re.sub(r'[\"\'\[\]\{\}]', "", text)
+  return " ".join(text.split()).strip()
 
-export function HomePage() {
-  const { animes: recentAnimes, loading: recentAnimesLoading } = useAnimes({ orderBy: 'created_at', limit: 10 });
-  const { animes: popularAnimes, loading: popularAnimesLoading } = useAnimes({ orderBy: 'view_count', limit: 10 });
-  const { animes: topRatedAnimes, loading: topRatedAnimesLoading } = useAnimes({ orderBy: 'rating_average', limit: 10 });
 
-  const [heroItems, setHeroItems] = useState<any[]>([]);
-  const [heroLoading, setHeroLoading] = useState(true);
+def normalize_series_title(raw_title, cat_type=""):
+  name = re.sub(
+      r"^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج|حصريا|جديد)?\s*", "", raw_title
+  ).strip()
 
-  const [movieSectionsData, setMovieSectionsData] = useState<Record<string, any[]>>({});
-  const [cimaSeries, setCimaSeries] = useState<any[]>([]);
-  const [recentMovies, setRecentMovies] = useState<any[]>([]);
-  const [movieSectionsLoading, setMovieSectionsLoading] = useState(true);
-  const [cimaSeriesLoading, setCimaSeriesLoading] = useState(true);
-  const [recentMoviesLoading, setRecentMoviesLoading] = useState(true);
-
-  // جلب محتوى متنوع للـ Hero (أفلام + مسلسلات + أنمي)
-  useEffect(() => {
-    let active = true;
-    async function fetchHeroContent() {
-      try {
-        const [animeRes, movieRes, seriesRes] = await Promise.all([
-          supabase.from('animes').select('*').eq('published', true).order('rating_average', { ascending: false }).limit(2),
-          supabase.from('movies_cima').select('*').order('id', { ascending: false }).limit(2),
-          supabase.from('tv_series').select('*').order('id', { ascending: false }).limit(1)
-        ]);
-
-        if (!active) return;
-
-        const mixedHero = [
-          ...(animeRes.data || []).map(a => ({ ...a, media_type: 'anime', cover_image_url: a.cover_image_url || a.banner_image_url })),
-          ...(movieRes.data || []).map(mapCimaMovie),
-          ...(seriesRes.data || []).map(mapCimaSeries),
-        ];
-
-        if (mixedHero.length > 0) {
-          setHeroItems(mixedHero);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (active) setHeroLoading(false);
-      }
+  season_num = 1
+  s_match = re.search(
+      r"(?:الموسم|Season)\s*(?:الـ|ال)?\s*(\d+)", name, re.IGNORECASE
+  )
+  if s_match:
+    season_num = int(s_match.group(1))
+  else:
+    arabic_numbers = {
+        "الاول": 1,
+        "الأول": 1,
+        "الاولى": 1,
+        "الأولى": 1,
+        "الثاني": 2,
+        "الثانية": 2,
+        "الثالث": 3,
+        "الثالثة": 3,
+        "الرابع": 4,
+        "الرابعة": 4,
+        "الخامس": 5,
+        "الخامسة": 5,
+        "السادس": 6,
+        "السابعة": 7,
+        "الثامن": 8,
+        "التاسع": 9,
+        "العاشر": 10,
     }
+    for word, num in arabic_numbers.items():
+      if word in name:
+        season_num = num
+        break
 
-    fetchHeroContent();
-    return () => { active = false; };
-  }, []);
+  clean_name = re.sub(
+      r"\s*(الموسم|Season|الاول|الأول|الثاني|الثالث|الرابع|الخامس|الحلقة|\d+|-|\||مترجم|مدبلج|اكوام|Akwam).*",
+      "",
+      name,
+      flags=re.IGNORECASE,
+  ).strip()
+  clean_name = clean_text(clean_name)
 
-  // جلب أقسام الأفلام والمسلسلات من قاعدة البيانات
-  useEffect(() => {
-    let active = true;
-    const timer = setTimeout(() => {
-      Promise.all(
-        MOVIE_SECTIONS.map(async (sec) => {
-          if (sec.key === 'ramadan-2026') {
-            const { data } = await supabase
-              .from('tv_series')
-              .select('*')
-              .eq('category_type', sec.category)
-              .eq('year', sec.year)
-              .limit(10)
-              .order('id', { ascending: false });
-            return [sec.key, (data || []).map(mapCimaSeries)] as const;
-          } else {
-            const { data } = await supabase
-              .from('movies_cima')
-              .select('*')
-              .eq('category_type', sec.category)
-              .eq('year', sec.year)
-              .limit(10)
-              .order('id', { ascending: false });
-            return [sec.key, (data || []).map(mapCimaMovie)] as const;
-          }
-        })
-      ).then((entries) => {
-        if (!active) return;
-        setMovieSectionsData(Object.fromEntries(entries));
-        setMovieSectionsLoading(false);
-      }).catch(() => {
-        if (active) setMovieSectionsLoading(false);
-      });
+  invalid_names = ["جديد", "حصريا", "مسلسل", "انمي", "برنامج", "الحلقة"]
+  if not clean_name or clean_name in invalid_names or len(clean_name) < 2:
+    return None, None, None
 
-      // أحدث المسلسلات
-      supabase
-        .from('tv_series')
-        .select('*')
-        .limit(10)
-        .order('id', { ascending: false })
-        .then(({ data }) => {
-          if (active && data) setCimaSeries(data.map(mapCimaSeries));
-          if (active) setCimaSeriesLoading(false);
-        }).catch(() => {
-          if (active) setCimaSeriesLoading(false);
-        });
+  # 📌 التعديل الجذري: إذا كان الموسم الأول، يتم إرجاع اسم المسلسل صافياً بدون كلمة "الموسم" لتجنب التكرار والأخطاء
+  if season_num > 1:
+    unified_title = f"{clean_name} - الموسم {season_num}"
+  else:
+    unified_title = clean_name
 
-      // أحدث الأفلام بشكل عام
-      supabase
-        .from('movies_cima')
-        .select('*')
-        .limit(10)
-        .order('id', { ascending: false })
-        .then(({ data }) => {
-          if (active && data) setRecentMovies(data.map(mapCimaMovie));
-          if (active) setRecentMoviesLoading(false);
-        }).catch(() => {
-          if (active) setRecentMoviesLoading(false);
-        });
-    }, 300);
+  return unified_title, season_num, clean_name
 
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, []);
 
-  const { favoriteIds, toggleFavorite } = useFavorites();
-  const { items: continueItems, loading: continueLoading } = useContinueWatching();
+def extract_episode_number(text):
+  e_match = re.search(
+      r"(?:الحلقة|Episode)\s*(?:الـ|ال)?\s*(\d+)", text, re.IGNORECASE
+  )
+  return int(e_match.group(1)) if e_match else 1
 
-  useSEO({
-    title: 'سيما سبيس CimaSpace — مشاهدة وتحميل الأفلام والمسلسلات والأنمي بجودة عالية',
-    description: 'سيما سبيس CimaSpace - منصة المشاهدة الأولى عربياً. شاهد وتحميل أحدث الأفلام العربية والأجنبية والمسلسلات والأنمي المترجم والمدبلج بجودة عالية HD.',
-    canonicalPath: '/',
-  });
 
-  const handleToggleFav = useCallback(
-    (id: string, mediaType?: 'anime' | 'movie' | 'series') => {
-      toggleFavorite(id, mediaType && mediaType !== 'anime' ? { mediaType } : undefined);
-    },
-    [toggleFavorite]
-  );
+def shorten_link_via_shrinkme(original_url):
+  if not original_url:
+    return original_url
+  if "shrinkme.io" in original_url or "shrinkme.click" in original_url:
+    return original_url
+  try:
+    encoded_url = urllib.parse.quote(original_url)
+    api_url = (
+        f"https://shrinkme.io/api?api={SHRINKME_API_TOKEN}&url={encoded_url}"
+    )
+    response = requests.get(api_url, timeout=10)
+    if response.status_code == 200:
+      data = response.json()
+      if data.get("status") == "success" and data.get("shortenedUrl"):
+        return data.get("shortenedUrl")
+  except Exception:
+    pass
+  return original_url
 
-  return (
-    <div className="relative min-h-screen bg-[#07070A] text-white font-sans selection:bg-red-600 selection:text-white pb-32 dir-rtl overflow-x-hidden">
-      
-      <div className="absolute top-0 left-0 right-0 h-[500px] bg-gradient-to-b from-red-950/25 via-transparent to-transparent pointer-events-none blur-3xl z-0" />
 
-      {heroLoading ? (
-        <div className="relative h-[70vh] sm:h-[85vh] min-h-[460px] w-full bg-gradient-to-r from-[#121218] via-[#1a1a24] to-[#121218] animate-pulse" />
-      ) : (
-        <Hero animes={heroItems} />
-      )}
+def get_tmdb_poster(title):
+  try:
+    clean_name = re.sub(r"[\d\-\_\:\,\.\(\)]", " ", title)
+    clean_name = clean_text(clean_name)
+    if not clean_name or len(clean_name) < 2:
+      return "غير متوفر"
+    query = urllib.parse.quote(clean_name)
+    url = (
+        "https://api.themoviedb.org/3/search/multi?api_key=3f4534f3c7e1451f28b49231f47d3c3d&query="
+        f"{query}&language=ar"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=5) as response:
+      data = json.loads(response.read().decode())
+      results = data.get("results", [])
+      for res in results:
+        poster_path = res.get("poster_path")
+        if poster_path:
+          return f"https://image.tmdb.org/t/p/w500{poster_path}"
+  except Exception:
+    pass
+  return "غير متوفر"
 
-      <div className="relative z-20 mt-4 sm:mt-6 space-y-6 sm:space-y-10 px-4 sm:px-8 lg:px-14 w-full max-w-full overflow-hidden">
 
-        {continueItems && continueItems.length > 0 && (
-          <ContinueWatchingSection items={continueItems} loading={continueLoading} />
-        )}
+def fetch_download_links_only(page, item_page_url):
+  raw_download_links = []
+  clean_base_url = item_page_url.rstrip("/")
 
-        <div className="w-full py-1" style={hideScrollbarStyle}>
-          <CategoryChips />
-        </div>
+  target_urls = [f"{clean_base_url}/download", clean_base_url]
 
-        <RecommendedSection
-          popularAnimes={popularAnimes}
-          topRatedAnimes={topRatedAnimes}
-          loading={popularAnimesLoading || topRatedAnimesLoading}
-          favoriteIds={favoriteIds}
-          onToggleFav={handleToggleFav}
-        />
+  for target in target_urls:
+    try:
+      res = page.goto(target, wait_until="domcontentloaded", timeout=12000)
+      if res and res.status == 404 and target != clean_base_url:
+        continue
 
-        <SwipeableSection
-          title="أحدث الأفلام المضافة"
-          icon={<Film className="h-5 w-5 sm:h-6 sm:w-6 text-red-500 fill-red-500/20" />}
-          loading={recentMoviesLoading}
-          animes={recentMovies}
-          favoriteIds={favoriteIds}
-          onToggleFav={handleToggleFav}
-          viewMoreHref="/movies"
-        />
+      time.sleep(1.5)
 
-        <Top10Section animes={popularAnimes} loading={popularAnimesLoading} />
+      links = page.evaluate("""() => {
+                const anchors = Array.from(document.querySelectorAll('a[href]'));
+                return anchors.map(a => a.href).filter(h => {
+                    if (!h || h.startsWith('javascript') || h.startsWith('chrome-error://')) return false;
+                    if (h === window.location.href || h.endsWith('/download') || h.endsWith('/download/')) return false;
+                    
+                    return h.includes('/download/') || 
+                           h.includes('link') || 
+                           h.includes('file') || 
+                           h.includes('niramirus') || 
+                           h.includes('server') ||
+                           h.includes('direct') ||
+                           h.includes('get') ||
+                           !h.includes('akwams.org');
+                });
+            }""")
 
-        <SwipeableSection
-          title="أحدث المسلسلات"
-          icon={<Tv className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-400" />}
-          loading={cimaSeriesLoading}
-          animes={cimaSeries}
-          favoriteIds={favoriteIds}
-          onToggleFav={handleToggleFav}
-          viewMoreHref="/series"
-        />
+      for link in links:
+        if link and link not in raw_download_links:
+          raw_download_links.append(link)
 
-        <SwipeableSection
-          title="أنمي أضيفت حديثاً"
-          icon={<Sparkles className="h-5 w-5 sm:h-6 sm:w-6 text-red-500 fill-red-500/20" />}
-          loading={recentAnimesLoading}
-          animes={recentAnimes}
-          favoriteIds={favoriteIds}
-          onToggleFav={handleToggleFav}
-        />
+      if raw_download_links:
+        break
+    except Exception:
+      pass
 
-        {MOVIE_SECTIONS.map(sec => (
-          <SwipeableSection
-            key={sec.key}
-            title={sec.label}
-            icon={sec.icon}
-            loading={movieSectionsLoading}
-            animes={movieSectionsData[sec.key] || []}
-            favoriteIds={favoriteIds}
-            onToggleFav={handleToggleFav}
-            viewMoreHref={sec.href}
-          />
-        ))}
+  return [shorten_link_via_shrinkme(l) for l in raw_download_links if l]
 
-        <SwipeableSection
-          title="الأكثر مشاهدة وتداولاً"
-          icon={<Flame className="h-5 w-5 sm:h-6 sm:w-6 text-amber-500 fill-amber-500/20" />}
-          loading={popularAnimesLoading}
-          animes={popularAnimes}
-          favoriteIds={favoriteIds}
-          onToggleFav={handleToggleFav}
-        />
 
-        <SwipeableSection
-          title="الأعلى تقييماً وعالمياً"
-          icon={<Star className="h-5 w-5 sm:h-6 sm:w-6 text-yellow-400 fill-yellow-400" />}
-          loading={topRatedAnimesLoading}
-          animes={topRatedAnimes}
-          favoriteIds={favoriteIds}
-          onToggleFav={handleToggleFav}
-        />
+def fetch_streaming_links_with_clicking(page, item_page_url):
+  watch_page_url = f"{item_page_url.rstrip('/')}/watch/"
+  extracted_streaming_links = set()
 
-      </div>
-    </div>
-  );
-}
+  def handle_response(response):
+    try:
+      url = response.url
+      if any(
+          ext in url for ext in [".m3u8", "embed", "player", "vidsrc", "stream"]
+      ):
+        if (
+            "akwams" not in url
+            and not url.endswith(".js")
+            and not url.endswith(".css")
+        ):
+          extracted_streaming_links.add(url)
 
-function ContinueWatchingSection({ items, loading }: { items: any[]; loading: boolean }) {
-  const { navigate } = useRouter();
-  if (loading) return <RowSkeletonSection title="متابعة المشاهدة" />;
-  if (!items || items.length === 0) return null;
+      if "json" in response.headers.get("content-type", ""):
+        try:
+          data = response.json()
+          data_str = json.dumps(data)
+          found_urls = re.findall(r"https?://[^\s\"\'\\]+", data_str)
+          for u in found_urls:
+            if "akwams" not in u and any(
+                k in u for k in ["embed", "player", "m3u8", "vidsrc", "stream"]
+            ):
+              extracted_streaming_links.add(u)
+        except Exception:
+          pass
+    except Exception:
+      pass
 
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-3 px-1">
-        <div className="h-5 w-2 rounded-full bg-red-600" />
-        <h2 className="text-lg sm:text-xl font-black text-white">متابعة المشاهدة</h2>
-      </div>
-      <div className="flex gap-3 sm:gap-4 pb-3 pt-1" style={hideScrollbarStyle}>
-        {items.map((item) => (
-          <div
-            key={item.id}
-            onClick={() => navigate(`/watch/${item.anime_id}/${item.episode_id}`)}
-            className="group relative w-36 sm:w-48 md:w-56 shrink-0 cursor-pointer rounded-2xl bg-[#121219] border border-white/10 overflow-hidden"
-          >
-            <div className="relative aspect-[16/9] sm:aspect-[2/3] w-full overflow-hidden bg-zinc-950">
-              <img
-                src={item.animes?.cover_image_url || item.episodes?.thumbnail_url}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                className="h-full w-full object-cover"
-              />
-            </div>
-            <div className="p-2.5 space-y-1">
-              <h3 className="truncate text-xs sm:text-sm font-bold text-gray-100">{item.animes?.title || 'محتوى'}</h3>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
+  page.on("response", handle_response)
 
-function RecommendedSection({
-  popularAnimes,
-  topRatedAnimes,
-  loading,
-  favoriteIds,
-  onToggleFav,
-}: {
-  popularAnimes: any[];
-  topRatedAnimes: any[];
-  loading: boolean;
-  favoriteIds: Set<string>;
-  onToggleFav: (id: string, mediaType?: 'anime' | 'movie' | 'series') => void;
-}) {
-  const { navigate } = useRouter();
+  try:
+    page.goto(watch_page_url, wait_until="domcontentloaded", timeout=15000)
+    time.sleep(2)
 
-  const recommended = Array.from(
-    new Map(
-      [...(topRatedAnimes || []), ...(popularAnimes || [])].map((item) => [item.id, item])
-    ).values()
-  ).slice(0, 10);
+    server_links = page.evaluate("""() => {
+            const elements = Array.from(document.querySelectorAll('a, button, div, span'))
+                .filter(el => {
+                    const txt = el.innerText ? el.innerText.trim() : '';
+                    return txt.includes('سيرفر') || (el.className && el.className.toString().includes('server'));
+                });
+            return elements.length;
+        }""")
 
-  if (loading) return <RowSkeletonSection title="مختارات لك" />;
-  if (recommended.length === 0) return null;
+    for index in range(min(server_links, 15)):
+      try:
+        page.evaluate(
+            f"""(idx) => {{
+                    const elements = Array.from(document.querySelectorAll('a, button, div, span'))
+                        .filter(el => {{
+                            const txt = el.innerText ? el.innerText.trim() : '';
+                            return txt.includes('سيرفر') || (el.className && el.className.toString().includes('server'));
+                        }});
+                    if (elements[idx]) {{
+                        elements[idx].click();
+                    }}
+                }}""",
+            index,
+        )
 
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-xl bg-red-600/10 border border-red-500/20">
-            <Sparkles className="h-5 w-5 sm:h-6 sm:w-6 text-red-400" />
-          </div>
-          <div>
-            <h2 className="text-lg sm:text-xl font-black text-white">مختارات لك</h2>
-            <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">
-              أعمال تستحق المشاهدة
-            </p>
-          </div>
-        </div>
+        time.sleep(1.2)
 
-        <button
-          onClick={() => navigate('/anime-list')}
-          className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-bold text-gray-200 hover:bg-red-600 hover:text-white transition-all"
-        >
-          المزيد
-          <ChevronLeft className="h-3.5 w-3.5" />
-        </button>
-      </div>
+        iframe_src = page.evaluate("""() => {
+                    const frame = document.querySelector('iframe');
+                    if (frame) {
+                        return frame.src || frame.getAttribute('data-src') || frame.getAttribute('data-lazy-src');
+                    }
+                    return null;
+                }""")
 
-      <div
-        className="flex gap-3.5 sm:gap-4 pb-3 pt-1"
-        style={hideScrollbarStyle}
-      >
-        {recommended.map((item: any) => (
-          <div key={item.id} className="w-36 sm:w-48 md:w-56 shrink-0">
-            <AnimeCard
-              anime={item}
-              favoriteIds={favoriteIds}
-              onToggleFav={() => onToggleFav(item.id, item.media_type)}
-            />
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
+        if (
+            iframe_src
+            and "akwams" not in iframe_src
+            and not iframe_src.startswith("about:blank")
+        ):
+          extracted_streaming_links.add(iframe_src)
 
-function Top10Section({ animes, loading }: { animes: any[]; loading: boolean }) {
-  const { navigate } = useRouter();
-  if (loading) return <RowSkeletonSection title="أفضل 10 أعمال اليوم" />;
-  if (!animes || animes.length === 0) return null;
+      except Exception:
+        pass
 
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-2.5">
-        <span className="text-xs sm:text-sm font-black text-white bg-red-600 px-2.5 py-1 rounded-lg">TOP 10</span>
-        <h2 className="text-lg sm:text-xl font-extrabold text-white">الأكثر مشاهدة اليوم</h2>
-      </div>
-      <div className="flex gap-4 sm:gap-5 pb-3 pt-1" style={hideScrollbarStyle}>
-        {animes.slice(0, 10).map((anime, index) => (
-          <div
-            key={anime.id}
-            onClick={() => {
-              if (anime.media_type === 'movie') navigate(`/movie/${anime.id}`);
-              else if (anime.media_type === 'series') navigate(`/series/${anime.id}`);
-              else navigate(`/anime/${anime.id}`);
-            }}
-            className="relative flex items-end cursor-pointer w-36 sm:w-48 md:w-56 shrink-0 group"
-          >
-            <span className="text-[90px] sm:text-[150px] font-black leading-none text-transparent select-none -mr-6 z-0" style={{ WebkitTextStroke: '2px rgba(255, 255, 255, 0.15)' }}>
-              {index + 1}
-            </span>
-            <div className="w-32 sm:w-44 md:w-52 relative z-10 rounded-2xl overflow-hidden border border-white/10 bg-zinc-900 shrink-0">
-              <img
-                src={anime.cover_image_url || anime.banner_image_url}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                className="aspect-[2/3] w-full object-cover"
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
+    for frame in page.frames:
+      f_url = frame.url
+      if (
+          f_url
+          and "akwams" not in f_url
+          and "about:blank" not in f_url
+          and not f_url.startswith("chrome-error://")
+      ):
+        extracted_streaming_links.add(f_url)
 
-function SwipeableSection({
-  title,
-  icon,
-  loading,
-  animes,
-  favoriteIds,
-  onToggleFav,
-  viewMoreHref,
-}: {
-  title: string;
-  icon?: React.ReactNode;
-  loading: boolean;
-  animes: any[];
-  favoriteIds: Set<string>;
-  onToggleFav: (id: string, mediaType?: 'anime' | 'movie' | 'series') => void;
-  viewMoreHref?: string;
-}) {
-  const { navigate } = useRouter();
-  const railRef = useRef<HTMLDivElement>(null);
+  except Exception:
+    pass
+  finally:
+    try:
+      page.remove_listener("response", handle_response)
+    except Exception:
+      pass
 
-  if (loading) return <RowSkeletonSection title={title} />;
-  if (!animes || animes.length === 0) return null;
+  return [
+      link for link in extracted_streaming_links if link and link.startswith("http")
+  ]
 
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-xl bg-white/5 border border-white/10">{icon}</div>
-          <h2 className="text-lg sm:text-xl font-black text-white">{title}</h2>
-        </div>
-        {viewMoreHref && (
-          <button
-            onClick={() => navigate(viewMoreHref)}
-            className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-bold text-gray-200 hover:bg-red-600 hover:text-white transition-all"
-          >
-            عرض الكل
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
 
-      <div ref={railRef} className="flex gap-3.5 sm:gap-4 pb-3 pt-1" style={{ ...hideScrollbarStyle, scrollBehavior: 'smooth' }}>
-        {animes.map((a) => (
-          <div key={a.id} className="w-36 sm:w-48 md:w-56 shrink-0">
-            <AnimeCard anime={a} favoriteIds={favoriteIds} onToggleFav={() => onToggleFav(a.id, a.media_type)} />
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
+def process_item(page, item_page_url, cat_type):
+  if "مسلسلات" not in cat_type:
+    return
 
-function RowSkeletonSection({ title }: { title: string }) {
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2.5">
-        <div className="h-5 w-2 rounded-full bg-red-600/30 animate-pulse" />
-        <h2 className="text-lg sm:text-xl font-bold text-gray-600">{title}</h2>
-      </div>
-      <div className="flex gap-3.5 sm:gap-4 pb-3 pt-1" style={hideScrollbarStyle}>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="w-36 sm:w-48 md:w-56 shrink-0">
-            <CardSkeleton />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+  try:
+    page.goto(item_page_url, wait_until="domcontentloaded", timeout=15000)
+  except Exception:
+    return
+
+  title = ""
+  try:
+    page_title = page.title()
+    if page_title:
+      title = clean_text(page_title)
+  except Exception:
+    pass
+
+  invalid_keywords = [
+      "page not found",
+      "404",
+      "تصنيف",
+      "الصفحة الرئيسية",
+      "تسجيل الدخول",
+  ]
+  if not title or any(kw in title.lower() for kw in invalid_keywords):
+    return
+
+  unique_season_title, s_num, raw_base_name = normalize_series_title(
+      title, cat_type
+  )
+  if not unique_season_title:
+    return
+
+  e_num = extract_episode_number(title)
+  print(f"    📺 مسلسل: {unique_season_title} | حلقة {e_num}")
+
+  # 📌 استخراج سنة العرض تلقائياً (تجنب خطأ NameError للمتغير series_year)
+  year_match = re.search(r"\b(20\d{2})\b", title + " " + cat_type)
+  series_year = int(year_match.group(1)) if year_match else 2026
+
+  poster = "غير متوفر"
+  try:
+    poster = page.evaluate("""() => {
+            let metaImg = document.querySelector('meta[property="og:image"]');
+            if (metaImg && metaImg.content) return metaImg.content;
+            const el = document.querySelector('.entry-image img, .poster img, img');
+            return el ? (el.src || el.getAttribute('data-src')) : "غير متوفر";
+        }""")
+  except Exception:
+    pass
+
+  if poster == "غير متوفر" or not poster.startswith("http"):
+    poster = get_tmdb_poster(raw_base_name)
+
+  description = "غير متوفر"
+  try:
+    desc_text = page.evaluate(
+        "() => document.querySelector('.story, .text-white, article"
+        " p')?.innerText.trim()"
+    )
+    if desc_text and len(desc_text) > 5:
+      description = desc_text
+  except Exception:
+    pass
+
+  rating = "غير متوفر"
+  try:
+    rating_text = page.evaluate(
+        "() => document.querySelector('span.mx-2, .rating"
+        " span')?.innerText.trim()"
+    )
+    if rating_text:
+      rating = rating_text
+  except Exception:
+    pass
+
+  genres = []
+  try:
+    genres = page.evaluate(
+        '() => Array.from(document.querySelectorAll(\'.genres a, .cats a,'
+        ' a[href*="category"]\')).map(t =>'
+        " t.innerText.trim()).filter(Boolean)"
+    )
+  except Exception:
+    pass
+
+  formatted_series = {
+      "title": unique_season_title,
+      "category_type": cat_type,
+      "poster_url": poster,
+      "year": series_year,
+      "description": description,
+      "rating": rating,
+      "genres": [clean_text(g) for g in genres if clean_text(g)],
+  }
+
+  try:
+    supabase.table("tv_series").upsert(
+        formatted_series, on_conflict="title"
+    ).execute()
+    get_id = (
+        supabase.table("tv_series")
+        .select("id")
+        .eq("title", unique_season_title)
+        .execute()
+    )
+    if not get_id.data:
+      return
+    series_id = get_id.data[0]["id"]
+  except Exception:
+    return
+
+  try:
+    existing_ep = (
+        supabase.table("episodes_cima")
+        .select("id, watch_url, direct_links")
+        .eq("series_id", series_id)
+        .eq("season_number", s_num)
+        .eq("episode_number", e_num)
+        .execute()
+    )
+
+    old_streaming = []
+    old_download = []
+    existing_watch_url = None
+
+    if existing_ep.data:
+      ep_row = existing_ep.data[0]
+      existing_watch_url = ep_row.get("watch_url")
+      existing_direct_links = ep_row.get("direct_links") or {}
+      old_streaming = existing_direct_links.get("streaming_links", []) or []
+      old_download = existing_direct_links.get("download_links", []) or []
+
+      if len(old_streaming) > 1 and len(old_download) > 1:
+        print(
+            "    ⏭️ تخطي: الحلقة تحتوي بالفعل على روابط متعدّدة (مشاهدة:"
+            f" {len(old_streaming)} | تحميل: {len(old_download)})"
+        )
+        return
+
+  except Exception:
+    old_streaming, old_download, existing_watch_url = [], [], None
+
+  new_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
+  new_download_links = fetch_download_links_only(page, item_page_url)
+
+  final_streaming = list(dict.fromkeys(old_streaming + new_streaming_links))
+  final_download = list(dict.fromkeys(old_download + new_download_links))
+
+  watch_url_val = (
+      existing_watch_url
+      if existing_watch_url
+      else (final_streaming[0] if final_streaming else None)
+  )
+
+  episode_data = {
+      "series_id": series_id,
+      "title": f"الحلقة {e_num}",
+      "season_number": s_num,
+      "episode_number": e_num,
+      "watch_url": watch_url_val,
+      "direct_links": {
+          "streaming_links": final_streaming,
+          "download_links": final_download,
+      },
+  }
+
+  try:
+    supabase.table("episodes_cima").upsert(
+        episode_data, on_conflict="series_id,season_number,episode_number"
+    ).execute()
+    print(
+        "    ✅ تم التحديث بنجاح | (مشاهدة:"
+        f" {len(final_streaming)} | تحميل: {len(final_download)})"
+    )
+  except Exception as e:
+    print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
+
+
+def scrape_akwam_site():
+  categories = [
+      ("https://akwams.org/category/مسلسلات-رمضان-2026", "مسلسلات رمضان 2026"),
+      ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
+      ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي"),
+      ("https://akwams.org/category/مسلسلات-اسيوية", "مسلسلات اسيوية"),
+      ("https://akwams.org/category/مسلسلات-انمي", "مسلسلات انمي"),
+      ("https://akwams.org/category/مسلسلات-تركية", "مسلسلات تركية"),
+      ("https://akwams.org/category/مسلسلات-كرتون", "مسلسلات كرتون"),
+      ("https://akwams.org/category/مسلسلات-وثائقية", "مسلسلات وثائقية"),
+  ]
+
+  print("🚀 بدء السكربت الشامل لجميع أقسام المسلسلات مع التخطي الذكي...")
+  with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    context = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+        )
+    )
+    context.route(
+        "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,css}",
+        lambda route: route.abort(),
+    )
+    page = context.new_page()
+
+    for base_url, cat_type in categories:
+      print(f"\n📂 بدء سحب قسم: {cat_type}")
+      page_number = 1
+      while True:
+        url = (
+            f"{base_url}/page/{page_number}/"
+            if page_number > 1
+            else f"{base_url}/"
+        )
+        print(f"  📄 صفحة [{page_number}]")
+
+        try:
+          response = page.goto(
+              url, wait_until="domcontentloaded", timeout=30000
+          )
+          if response and response.status == 404:
+            break
+
+          time.sleep(2)
+          item_links = page.evaluate("""() => {
+                        return [...new Set(Array.from(document.querySelectorAll('a')).map(a => a.href).filter(h => {
+                            if (!h || !h.includes('akwams.org') || h.includes('/category/') || h.includes('/page/') || h.includes('/tag/')) return false;
+                            const parts = h.split('/').filter(Boolean);
+                            return parts.length >= 3 && parts[parts.length - 1].length > 5;
+                        }))];
+                    }""")
+
+          if not item_links:
+            break
+
+          for link in item_links:
+            process_item(page, link, cat_type)
+          page_number += 1
+        except Exception:
+          break
+
+    browser.close()
+
+
+if __name__ == "__main__":
+  scrape_akwam_site()
