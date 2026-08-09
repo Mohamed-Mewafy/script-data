@@ -288,6 +288,7 @@ def process_item(page, item_page_url, cat_type):
         "title": unique_season_title,
         "category_type": cat_type,
         "poster_url": poster,
+        "year": series_year,
         "description": description,
         "rating": rating,
         "genres": [clean_text(g) for g in genres if clean_text(g)]
