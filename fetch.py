@@ -237,7 +237,7 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         pass
 
-    invalid_keywords = ["page not found", "404", "رمضان", "تصنيف", "الصفحة الرئيسية", "تسجيل الدخول"]
+    invalid_keywords = ["page not found", "404", "تصنيف", "الصفحة الرئيسية", "تسجيل الدخول"]
     if not title or any(kw in title.lower() for kw in invalid_keywords):
         return
 
@@ -322,7 +322,6 @@ def process_item(page, item_page_url, cat_type):
             old_streaming = existing_direct_links.get("streaming_links", []) or []
             old_download = existing_direct_links.get("download_links", []) or []
 
-            # 🛑 الشرط: إذا كان يحتوي على أكثر من رابط للمشاهدة والتحميل (أو رابط واحد على الأقل لكلاهما)
             if len(old_streaming) > 1 and len(old_download) > 1:
                 print(f"    ⏭️ تخطي: الحلقة تحتوي بالفعل على روابط متعدّدة (مشاهدة: {len(old_streaming)} | تحميل: {len(old_download)})")
                 return
@@ -330,11 +329,9 @@ def process_item(page, item_page_url, cat_type):
     except Exception:
         old_streaming, old_download, existing_watch_url = [], [], None
 
-    # سحب الروابط فقط في حالة عدم استيفاء شرط التخطي
     new_streaming_links = fetch_streaming_links_with_clicking(page, item_page_url)
     new_download_links = fetch_download_links_only(page, item_page_url)
 
-    # دمج الروابط القديمة إن وجدت مع الجديدة ومنع التكرار
     final_streaming = list(dict.fromkeys(old_streaming + new_streaming_links))
     final_download = list(dict.fromkeys(old_download + new_download_links))
 
@@ -359,12 +356,19 @@ def process_item(page, item_page_url, cat_type):
         print(f"    ❌ خطأ أثناء حفظ الحلقة: {e}")
 
 def scrape_akwam_site():
+    # 📌 جميع أقسام المسلسلات المطلوبة من الصورة
     categories = [
+        ("https://akwams.org/category/مسلسلات-رمضان-2026", "مسلسلات رمضان 2026"),
         ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
-        ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي")
+        ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي"),
+        ("https://akwams.org/category/مسلسلات-اسيوية", "مسلسلات اسيوية"),
+        ("https://akwams.org/category/مسلسلات-انمي", "مسلسلات انمي"),
+        ("https://akwams.org/category/مسلسلات-تركية", "مسلسلات تركية"),
+        ("https://akwams.org/category/مسلسلات-كرتون", "مسلسلات كرتون"),
+        ("https://akwams.org/category/مسلسلات-وثائقية", "مسلسلات وثائقية")
     ]
 
-    print("🚀 بدء السكربت المخصص للمسلسلات مع التخطي الذكي...")
+    print("🚀 بدء السكربت الشامل لجميع أقسام المسلسلات مع التخطي الذكي...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
