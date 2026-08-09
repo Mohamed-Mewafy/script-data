@@ -7,10 +7,19 @@ import json
 import requests
 from playwright.sync_api import sync_playwright
 from supabase import create_client, Client
+import cloudinary
+import cloudinary.uploader
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SHRINKME_API_TOKEN = os.environ.get("SHRINKME_API_TOKEN")
+
+# إعدادات Cloudinary
+cloudinary.config(
+    cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    api_key = os.environ.get("CLOUDINARY_API_KEY"),
+    api_secret = os.environ.get("CLOUDINARY_API_SECRET")
+)
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("⚠️ تنبيه: يرجى التأكد من ضبط متغيرات البيئة SUPABASE_URL و SUPABASE_KEY بشكل صحيح.")
@@ -22,6 +31,23 @@ def clean_text(text):
         return ""
     text = re.sub(r'[\"\'\[\]\{\}]', '', text)
     return " ".join(text.split()).strip()
+
+def get_optimized_image_url(original_url):
+    if not original_url or original_url == "غير متوفر":
+        return original_url
+    if "cloudinary.com" in original_url:
+        return original_url
+    try:
+        upload_result = cloudinary.uploader.upload(
+            original_url,
+            folder="cimaspace_posters",
+            fetch_format="auto",
+            quality="auto"
+        )
+        return upload_result.get('secure_url', original_url)
+    except Exception as e:
+        print(f"    ⚠️ خطأ أثناء رفع وتحويل صورة المسلسل إلى Cloudinary: {e}")
+        return original_url
 
 def normalize_series_title(raw_title, cat_type=""):
     name = re.sub(r'^(مشاهدة|تحميل)?\s*(مسلسل|انمي|برنامج|حصريا|جديد)?\s*', '', raw_title).strip()
@@ -276,6 +302,9 @@ def process_item(page, item_page_url, cat_type):
     if poster == "غير متوفر" or not poster.startswith("http"):
         poster = get_tmdb_poster(raw_base_name)
 
+    # تحسين ورفع البوستر مباشرة إلى Cloudinary قبل الحفظ
+    optimized_poster_url = get_optimized_image_url(poster)
+
     description = "غير متوفر"
     try:
         desc_text = page.evaluate("() => document.querySelector('.story, .text-white, article p')?.innerText.trim()")
@@ -301,7 +330,7 @@ def process_item(page, item_page_url, cat_type):
     formatted_series = {
         "title": unique_season_title,
         "category_type": cat_type,
-        "poster_url": poster,
+        "poster_url": optimized_poster_url,
         "year": series_year,
         "description": description,
         "rating": rating,
