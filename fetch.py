@@ -32,15 +32,21 @@ def clean_text(text):
     text = re.sub(r'[\"\'\[\]\{\}]', '', text)
     return " ".join(text.split()).strip()
 
-def get_optimized_image_url(original_url):
+def get_optimized_image_url(original_url, series_title):
     if not original_url or original_url == "غير متوفر":
         return original_url
     if "cloudinary.com" in original_url:
         return original_url
     try:
+        # تحويل اسم المسلسل ليكون صالحاً كمعرف ثابت لعدم تكرار الصور
+        safe_title = re.sub(r'[\s\-\_\:\,\.\(\)]+', '_', series_title).strip('_').lower()
+        public_id = f"cimaspace_posters/{safe_title}"
+
         upload_result = cloudinary.uploader.upload(
             original_url,
-            folder="cimaspace_posters",
+            public_id=public_id,
+            overwrite=True,
+            invalidate=True,
             fetch_format="auto",
             quality="auto"
         )
@@ -54,7 +60,6 @@ def normalize_series_title(raw_title, cat_type=""):
     
     season_num = 1
     
-    # مسلسلات رمضان والأقسام العربية تعتبر غالباً موسماً أول افتراضياً لتجنب الأخطاء
     if "رمضان" in cat_type or "عربي" in cat_type:
         season_num = 1
     else:
@@ -82,7 +87,6 @@ def normalize_series_title(raw_title, cat_type=""):
     if not clean_name or clean_name in invalid_names or len(clean_name) < 2:
         return None, None, None
 
-    # 📌 التعديل الجذري: إذا كان الموسم الأول أو مسلسلات رمضان، يكون العنوان نظيفاً تماماً بدون كلمة "الموسم"
     if season_num > 1 and "رمضان" not in cat_type:
         unified_title = f"{clean_name} - الموسم {season_num}"
     else:
@@ -302,8 +306,8 @@ def process_item(page, item_page_url, cat_type):
     if poster == "غير متوفر" or not poster.startswith("http"):
         poster = get_tmdb_poster(raw_base_name)
 
-    # تحسين ورفع البوستر مباشرة إلى Cloudinary قبل الحفظ
-    optimized_poster_url = get_optimized_image_url(poster)
+    # تمرير اسم المسلسل الفريد لضمان عدم تكرار البوستر واستبداله في Cloudinary
+    optimized_poster_url = get_optimized_image_url(poster, unique_season_title)
 
     description = "غير متوفر"
     try:
@@ -400,7 +404,6 @@ def process_item(page, item_page_url, cat_type):
 
 def scrape_akwam_site():
     categories = [
-        #("https://akwams.org/category/مسلسلات-رمضان-2026", "مسلسلات رمضان 2026"),
         ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
         ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي"),
         ("https://akwams.org/category/مسلسلات-اسيوية", "مسلسلات اسيوية"),
