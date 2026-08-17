@@ -400,7 +400,7 @@ def process_item(page, item_page_url, cat_type):
 
 def scrape_akwam_site():
     categories = [
-        ("https://akwams.org/category/مسلسلات-رمضان-2026", "مسلسلات رمضان 2026"),
+        #("https://akwams.org/category/مسلسلات-رمضان-2026", "مسلسلات رمضان 2026"),
         ("https://akwams.org/category/مسلسلات-اجنبي", "مسلسلات اجنبي"),
         ("https://akwams.org/category/مسلسلات-عربي", "مسلسلات عربي"),
         ("https://akwams.org/category/مسلسلات-اسيوية", "مسلسلات اسيوية"),
