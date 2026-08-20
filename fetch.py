@@ -38,7 +38,6 @@ def get_optimized_image_url(original_url, series_title):
     if "cloudinary.com" in original_url:
         return original_url
     try:
-        # تحويل اسم المسلسل ليكون صالحاً كمعرف ثابت لعدم تكرار الصور
         safe_title = re.sub(r'[\s\-\_\:\,\.\(\)]+', '_', series_title).strip('_').lower()
         public_id = f"cimaspace_posters/{safe_title}"
 
@@ -292,22 +291,38 @@ def process_item(page, item_page_url, cat_type):
     year_match = re.search(r'\b(20\d{2})\b', title + " " + cat_type)
     series_year = int(year_match.group(1)) if year_match else 2026
 
-    poster = "غير متوفر"
+    # --- بداية التعديل: محاولة جلب البوستر القديم قبل اتخاذ أي قرار ---
+    existing_poster = "غير متوفر"
+    series_id = None
     try:
-        poster = page.evaluate("""() => {
-            let metaImg = document.querySelector('meta[property="og:image"]');
-            if (metaImg && metaImg.content) return metaImg.content;
-            const el = document.querySelector('.entry-image img, .poster img, img');
-            return el ? (el.src || el.getAttribute('data-src')) : "غير متوفر";
-        }""")
-    except Exception:
+        get_series = supabase.table("tv_series").select("id, poster_url").eq("title", unique_season_title).execute()
+        if get_series.data:
+            series_id = get_series.data[0]["id"]
+            existing_poster = get_series.data[0].get("poster_url", "غير متوفر")
+    except:
         pass
 
-    if poster == "غير متوفر" or not poster.startswith("http"):
-        poster = get_tmdb_poster(raw_base_name)
+    # إذا كان البوستر غير موجود، نقوم بعملية الجلب والرفع
+    if existing_poster == "غير متوفر" or existing_poster is None or existing_poster == "":
+        poster = "غير متوفر"
+        try:
+            poster = page.evaluate("""() => {
+                let metaImg = document.querySelector('meta[property="og:image"]');
+                if (metaImg && metaImg.content) return metaImg.content;
+                const el = document.querySelector('.entry-image img, .poster img, img');
+                return el ? (el.src || el.getAttribute('data-src')) : "غير متوفر";
+            }""")
+        except Exception:
+            pass
 
-    # تمرير اسم المسلسل الفريد لضمان عدم تكرار البوستر واستبداله في Cloudinary
-    optimized_poster_url = get_optimized_image_url(poster, unique_season_title)
+        if poster == "غير متوفر" or not poster.startswith("http"):
+            poster = get_tmdb_poster(raw_base_name)
+        
+        optimized_poster_url = get_optimized_image_url(poster, unique_season_title)
+    else:
+        # استخدام البوستر القديم وتخطي الرفع
+        optimized_poster_url = existing_poster
+    # --- نهاية التعديل ---
 
     description = "غير متوفر"
     try:
@@ -343,10 +358,13 @@ def process_item(page, item_page_url, cat_type):
 
     try:
         supabase.table("tv_series").upsert(formatted_series, on_conflict="title").execute()
-        get_id = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
-        if not get_id.data:
+        if not series_id:
+            get_id = supabase.table("tv_series").select("id").eq("title", unique_season_title).execute()
+            if get_id.data:
+                series_id = get_id.data[0]["id"]
+        
+        if not series_id:
             return
-        series_id = get_id.data[0]["id"]
     except Exception:
         return
 
@@ -413,7 +431,7 @@ def scrape_akwam_site():
         ("https://akwams.org/category/مسلسلات-وثائقية", "مسلسلات وثائقية")
     ]
 
-    print("🚀 بدء السكربت الشامل لجميع أقسام المسلسلات مع التخطي الذكي...")
+    print("🚀 بدء السكربت الشامل لجميع أقسام المسلسلات مع التخطي الذكي للبوسترات...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
